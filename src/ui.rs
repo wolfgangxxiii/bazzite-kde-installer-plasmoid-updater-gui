@@ -806,6 +806,9 @@ fn switch_row(title: &str, subtitle: &str, active: bool) -> adw::SwitchRow {
 
 fn button(label: &str, suggested: bool) -> gtk::Button {
     let button = gtk::Button::new();
+    // Reserve a readable action width in horizontal cards; the narrow
+    // breakpoint expands the button to the full card width instead.
+    button.set_width_request(160);
     let text = gtk::Label::new(Some(label));
     text.set_wrap(true);
     text.set_wrap_mode(gtk::pango::WrapMode::WordChar);

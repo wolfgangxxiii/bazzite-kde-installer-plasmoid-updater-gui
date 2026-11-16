@@ -1,5 +1,6 @@
 use crate::settings::Settings;
 use anyhow::{anyhow, bail, Context, Result};
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use std::env;
 use std::fs::{self, File};
@@ -10,8 +11,7 @@ use std::process::{Command, Output, Stdio};
 use toml_edit::{value, Array, DocumentMut};
 
 pub const UPSTREAM: &str = "https://github.com/uwuclxdy/plasmoid-updater";
-const RELEASE_URL: &str = "https://github.com/uwuclxdy/plasmoid-updater/releases/latest/download";
-const ASSET: &str = "plasmoid-updater-linux-x86_64";
+const RELEASE_API: &str = "https://api.github.com/repos/uwuclxdy/plasmoid-updater/releases/latest";
 const SERVICE: &str = "bazzite-plasmoid-updater.service";
 const TIMER: &str = "bazzite-plasmoid-updater.timer";
 const MANAGED: &str = "# Managed by Bazzite Plasmoid Updater GUI";
@@ -142,27 +142,51 @@ fn download(url: &str, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn expected_checksum(content: &str, filename: &str) -> Result<String> {
-    let matched: Vec<&str> = content
-        .lines()
-        .filter_map(|line| {
-            let mut columns = line.split_whitespace();
-            let digest = columns.next()?;
-            let file = columns.next()?;
-            (file.trim_start_matches('*') == filename).then_some(digest)
-        })
-        .collect();
-    if matched.len() != 1
-        || matched[0].len() != 64
-        || !matched[0].bytes().all(|b| b.is_ascii_hexdigit())
-    {
-        bail!("Brak prawidłowej, pojedynczej sumy SHA-256 dla {filename}");
-    }
-    Ok(matched[0].to_ascii_lowercase())
+#[derive(Deserialize)]
+struct GitHubRelease {
+    tag_name: String,
+    assets: Vec<GitHubAsset>,
 }
 
-fn verify_checksum(binary: &Path, sums: &Path) -> Result<()> {
-    let expected = expected_checksum(&fs::read_to_string(sums)?, ASSET)?;
+#[derive(Deserialize)]
+struct GitHubAsset {
+    name: String,
+    browser_download_url: String,
+    digest: Option<String>,
+}
+
+fn verified_asset(release: &GitHubRelease) -> Result<(&str, &str)> {
+    let asset = release
+        .assets
+        .iter()
+        .find(|asset| {
+            matches!(
+                asset.name.as_str(),
+                "plasmoid-updater-linux-x64" | "plasmoid-updater-linux-x86_64"
+            )
+        })
+        .context("Najnowsze wydanie GitHub nie zawiera binarki Linux x86_64")?;
+    anyhow::ensure!(
+        asset
+            .browser_download_url
+            .starts_with(&format!("{UPSTREAM}/releases/download/")),
+        "Nieprawidłowy adres pobierania binarki"
+    );
+    let digest = asset
+        .digest
+        .as_deref()
+        .context("Brak sumy kontrolnej w metadanych GitHub")?;
+    let checksum = digest
+        .strip_prefix("sha256:")
+        .context("Nieobsługiwany typ sumy kontrolnej")?;
+    anyhow::ensure!(
+        checksum.len() == 64 && checksum.bytes().all(|b| b.is_ascii_hexdigit()),
+        "Nieprawidłowa suma SHA-256 w metadanych GitHub"
+    );
+    Ok((&asset.browser_download_url, checksum))
+}
+
+fn verify_checksum(binary: &Path, expected: &str) -> Result<()> {
     let mut file = File::open(binary)?;
     let mut hasher = Sha256::new();
     let mut buf = [0_u8; 16 * 1024];
@@ -175,7 +199,7 @@ fn verify_checksum(binary: &Path, sums: &Path) -> Result<()> {
     }
     let actual = format!("{:x}", hasher.finalize());
     anyhow::ensure!(
-        actual == expected,
+        actual.eq_ignore_ascii_case(expected),
         "Błędna suma SHA-256 — instalacja przerwana"
     );
     Ok(())
@@ -187,13 +211,19 @@ fn install_updater(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
         "Wydanie obsługuje obecnie tylko x86_64"
     );
     let temporary = tempfile::tempdir().context("Nie można utworzyć katalogu tymczasowego")?;
-    let binary = temporary.path().join(ASSET);
-    let sums = temporary.path().join("sha256sums.txt");
-    log("Pobieranie pliku wykonywalnego z GitHub Releases…");
-    download(&format!("{RELEASE_URL}/{ASSET}"), &binary)?;
-    log("Pobieranie sum kontrolnych…");
-    download(&format!("{RELEASE_URL}/sha256sums.txt"), &sums)?;
-    verify_checksum(&binary, &sums)?;
+    let metadata = temporary.path().join("release.json");
+    let binary = temporary.path().join("plasmoid-updater-linux-x86_64");
+    log("Odczytywanie metadanych najnowszego wydania GitHub…");
+    download(RELEASE_API, &metadata)?;
+    let release: GitHubRelease = serde_json::from_slice(&fs::read(metadata)?)
+        .context("GitHub zwrócił nieprawidłowe metadane wydania")?;
+    let (url, digest) = verified_asset(&release)?;
+    log(&format!(
+        "Wydanie {}: pobieranie {}…",
+        release.tag_name, url
+    ));
+    download(url, &binary)?;
+    verify_checksum(&binary, digest)?;
     log("SHA-256 poprawne. Instalowanie w ~/.local/bin…");
 
     let target = updater_binary(home);
@@ -346,19 +376,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn checksum_must_match_exact_filename() {
-        let checksums = format!("{}  other\n{} *{ASSET}\n", "a".repeat(64), "b".repeat(64));
-        assert_eq!(
-            expected_checksum(&checksums, ASSET).unwrap(),
-            "b".repeat(64)
-        );
-        assert!(expected_checksum(&checksums, "not-here").is_err());
+    fn release_asset_uses_the_github_digest() {
+        let release = GitHubRelease {
+            tag_name: "v0.2.1".into(),
+            assets: vec![GitHubAsset {
+                name: "plasmoid-updater-linux-x64".into(),
+                browser_download_url: format!(
+                    "{UPSTREAM}/releases/download/v0.2.1/plasmoid-updater-linux-x64"
+                ),
+                digest: Some(format!("sha256:{}", "b".repeat(64))),
+            }],
+        };
+        let (_, digest) = verified_asset(&release).unwrap();
+        assert_eq!(digest, "b".repeat(64));
     }
 
     #[test]
-    fn checksum_duplicate_is_rejected() {
-        let line = format!("{}  {ASSET}\n", "a".repeat(64));
-        assert!(expected_checksum(&format!("{line}{line}"), ASSET).is_err());
+    fn unknown_release_asset_is_rejected() {
+        let release = GitHubRelease {
+            tag_name: "v0.2.1".into(),
+            assets: vec![GitHubAsset {
+                name: "some-other-platform".into(),
+                browser_download_url: "https://example.org/download".into(),
+                digest: Some(format!("sha256:{}", "b".repeat(64))),
+            }],
+        };
+        assert!(verified_asset(&release).is_err());
     }
 
     #[test]

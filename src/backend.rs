@@ -104,8 +104,10 @@ fn find_existing_updater(home: &Path) -> Option<(PathBuf, String)> {
 }
 
 pub fn initial_settings(home: &Path) -> Result<Settings> {
-    let mut settings = Settings::load(home)?;
-    let path = upstream_config_path(home);
+    import_upstream_exclusions(Settings::load(home)?, &upstream_config_path(home))
+}
+
+fn import_upstream_exclusions(mut settings: Settings, path: &Path) -> Result<Settings> {
     if path.is_file() {
         let doc: DocumentMut = fs::read_to_string(&path)?
             .parse()
@@ -769,7 +771,10 @@ fn timer_schedule(hours: u8) -> Result<&'static str> {
 }
 
 fn upstream_document(home: &Path, settings: &Settings) -> Result<DocumentMut> {
-    let config_path = upstream_config_path(home);
+    upstream_document_at(&upstream_config_path(home), settings)
+}
+
+fn upstream_document_at(config_path: &Path, settings: &Settings) -> Result<DocumentMut> {
     let old = if config_path.is_file() {
         fs::read_to_string(&config_path)?
     } else {
@@ -959,9 +964,9 @@ mod tests {
         )
         .unwrap();
 
-        let settings = initial_settings(temp.path()).unwrap();
+        let settings = import_upstream_exclusions(Settings::default(), &path).unwrap();
         assert_eq!(settings.excluded_packages, vec!["weather"]);
-        let doc = upstream_document(temp.path(), &settings).unwrap();
+        let doc = upstream_document_at(&path, &settings).unwrap();
         let value = doc.to_string();
         assert!(value.contains("# user comment"));
         assert!(value.contains("assume_yes = true"));

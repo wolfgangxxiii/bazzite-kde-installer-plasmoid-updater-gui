@@ -1,0 +1,7 @@
+/target/
+/AppDir/
+/dist/
+*.AppImage
+*.AppImage.zsync
+/.rustup/
+/.cargo/

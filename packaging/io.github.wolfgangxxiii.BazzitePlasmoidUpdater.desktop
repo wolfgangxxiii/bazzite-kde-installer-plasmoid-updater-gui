@@ -1,0 +1,11 @@
+[Desktop Entry]
+Type=Application
+Name=Bazzite Plasmoid Updater
+GenericName=KDE Store updater installer
+Comment=Install and configure automatic KDE Plasma addon updates on Bazzite
+Exec=bazzite-plasmoid-updater-gui
+Icon=io.github.wolfgangxxiii.BazzitePlasmoidUpdater
+Terminal=false
+Categories=System;Settings;GTK;
+Keywords=Bazzite;KDE;Plasma;plasmoid;updates;
+StartupNotify=true

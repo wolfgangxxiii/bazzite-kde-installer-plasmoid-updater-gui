@@ -4,14 +4,17 @@ set -euo pipefail
 APPIMAGE="${1:-dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage}"
 mkdir -p ui-smoke
 app_pid=""
-trap 'if [[ -n "$app_pid" ]]; then kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi' EXIT
+trap 'if [[ -n "$app_pid" ]]; then kill -TERM -- "-$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi' EXIT
 
 capture_page() {
   local page="$1" width="$2" height="$3" label="$4"
   local window_id=""
 
   # An explicit initial page is deterministic across font themes and scaling.
-  BAZZITE_GUI_SMOKE_PAGE="$page" APPIMAGE_EXTRACT_AND_RUN=1 \
+  # AppImage's AppRun spawns a wrapped GUI process. A dedicated process group
+  # lets us terminate the entire tree; otherwise the next GTK instance exits
+  # after forwarding activation to the still-running first window.
+  setsid env BAZZITE_GUI_SMOKE_PAGE="$page" APPIMAGE_EXTRACT_AND_RUN=1 \
     GDK_BACKEND=x11 G_DEBUG=fatal-criticals \
     "$APPIMAGE" >"ui-smoke/${label}.log" 2>&1 &
   app_pid=$!
@@ -52,7 +55,7 @@ capture_page() {
     scrot 'ui-smoke/desktop-automation-scrolled.png'
   fi
 
-  kill "$app_pid" 2>/dev/null || true
+  kill -TERM -- "-$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
   sleep 0.3

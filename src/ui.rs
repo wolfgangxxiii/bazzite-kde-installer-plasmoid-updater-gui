@@ -65,7 +65,7 @@ struct UiParts {
     agent_value: gtk::Label,
     timer_value: gtk::Label,
     repair_button: gtk::Button,
-    repair_notice: adw::BreakpointBin,
+    repair_notice: gtk::Box,
 }
 
 fn english() -> bool {
@@ -469,8 +469,123 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
     });
 }
 
-// On desktop the action stays beside the text; a breakpoint moves it below
-// the description only when the available card width is genuinely narrow.
+// These icons are drawn locally instead of relying on the host's icon theme.
+// Some Bazzite/AppImage combinations do not provide the stock symbolic names.
+#[derive(Clone, Copy)]
+enum UiIcon {
+    Dashboard,
+    Install,
+    Addons,
+    Schedule,
+    Journal,
+    Computer,
+    Updater,
+    Agent,
+}
+
+fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
+    let icon = gtk::DrawingArea::new();
+    icon.set_content_width(18);
+    icon.set_content_height(18);
+    icon.set_size_request(18, 18);
+    icon.set_draw_func(move |area, cr, width, height| {
+        let color = area.color();
+        cr.set_source_rgba(
+            color.red().into(),
+            color.green().into(),
+            color.blue().into(),
+            color.alpha().into(),
+        );
+        cr.scale(width as f64 / 24.0, height as f64 / 24.0);
+        cr.set_line_width(2.0);
+        cr.set_line_cap(gtk::cairo::LineCap::Round);
+        cr.set_line_join(gtk::cairo::LineJoin::Round);
+        match kind {
+            UiIcon::Dashboard => {
+                for (x, y, w, h) in [
+                    (3.0, 3.0, 8.0, 8.0),
+                    (13.0, 3.0, 8.0, 5.0),
+                    (3.0, 13.0, 8.0, 8.0),
+                    (13.0, 10.0, 8.0, 11.0),
+                ] {
+                    cr.rectangle(x, y, w, h);
+                }
+            }
+            UiIcon::Install => {
+                cr.move_to(12.0, 3.0);
+                cr.line_to(12.0, 15.0);
+                cr.move_to(7.0, 10.0);
+                cr.line_to(12.0, 15.0);
+                cr.line_to(17.0, 10.0);
+                cr.move_to(4.0, 17.0);
+                cr.line_to(4.0, 21.0);
+                cr.line_to(20.0, 21.0);
+                cr.line_to(20.0, 17.0);
+            }
+            UiIcon::Addons => {
+                for (x, y) in [(3.0, 3.0), (14.0, 3.0), (3.0, 14.0), (14.0, 14.0)] {
+                    cr.rectangle(x, y, 7.0, 7.0);
+                }
+            }
+            UiIcon::Schedule => {
+                cr.arc(12.0, 12.0, 9.0, 0.0, std::f64::consts::TAU);
+                cr.move_to(12.0, 6.0);
+                cr.line_to(12.0, 12.0);
+                cr.line_to(16.0, 14.0);
+            }
+            UiIcon::Journal => {
+                cr.move_to(15.0, 3.0);
+                cr.line_to(6.0, 3.0);
+                cr.line_to(6.0, 21.0);
+                cr.line_to(19.0, 21.0);
+                cr.line_to(19.0, 7.0);
+                cr.close_path();
+                cr.move_to(15.0, 3.0);
+                cr.line_to(15.0, 7.0);
+                cr.line_to(19.0, 7.0);
+                cr.move_to(9.0, 12.0);
+                cr.line_to(16.0, 12.0);
+                cr.move_to(9.0, 16.0);
+                cr.line_to(16.0, 16.0);
+            }
+            UiIcon::Computer => {
+                cr.rectangle(3.0, 4.0, 18.0, 13.0);
+                cr.move_to(12.0, 17.0);
+                cr.line_to(12.0, 21.0);
+                cr.move_to(8.0, 21.0);
+                cr.line_to(16.0, 21.0);
+            }
+            UiIcon::Updater => {
+                cr.arc(12.0, 12.0, 8.0, 3.75, 6.6);
+                cr.move_to(17.0, 4.0);
+                cr.line_to(20.0, 7.0);
+                cr.line_to(20.0, 3.0);
+                cr.new_sub_path();
+                cr.arc(12.0, 12.0, 8.0, 0.6, 3.45);
+                cr.move_to(7.0, 20.0);
+                cr.line_to(4.0, 17.0);
+                cr.line_to(4.0, 21.0);
+            }
+            UiIcon::Agent => {
+                cr.move_to(12.0, 2.0);
+                cr.line_to(20.0, 6.0);
+                cr.line_to(20.0, 12.0);
+                cr.curve_to(20.0, 16.0, 17.0, 20.0, 12.0, 22.0);
+                cr.curve_to(7.0, 20.0, 4.0, 16.0, 4.0, 12.0);
+                cr.line_to(4.0, 6.0);
+                cr.close_path();
+                cr.move_to(8.0, 12.0);
+                cr.line_to(11.0, 15.0);
+                cr.line_to(16.0, 9.0);
+            }
+        }
+        let _ = cr.stroke();
+    });
+    icon
+}
+
+// Restrict natural label widths: otherwise long translated descriptions push
+// buttons outside the card even before GTK evaluates its narrow breakpoint.
 fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::BreakpointBin {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     card.add_css_class("card");
@@ -485,11 +600,13 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
     heading.add_css_class("heading");
     heading.set_wrap(true);
     heading.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    heading.set_max_width_chars(46);
     heading.set_xalign(0.0);
     let detail = gtk::Label::new(Some(subtitle));
     detail.add_css_class("dim-label");
     detail.set_wrap(true);
     detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    detail.set_max_width_chars(46);
     detail.set_xalign(0.0);
     body.append(&heading);
     body.append(&detail);
@@ -497,14 +614,16 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
 
     button.set_halign(gtk::Align::End);
     button.set_valign(gtk::Align::Center);
-    button.set_margin_end(16);
-    button.set_margin_bottom(10);
+    button.set_margin_start(8);
+    button.set_margin_end(12);
+    button.set_margin_top(9);
+    button.set_margin_bottom(9);
     card.append(button);
 
     let adaptive = adw::BreakpointBin::new();
     adaptive.set_child(Some(&card));
     let narrow = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 520px").expect("Valid action width breakpoint"),
+        adw::BreakpointCondition::parse("max-width: 650px").expect("Valid action width breakpoint"),
     );
     narrow.add_setter(
         &card,
@@ -515,15 +634,16 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
     adaptive
 }
 
-fn status_tile(title: &str, icon_name: &str) -> (gtk::Box, gtk::Label) {
-    let tile = gtk::Box::new(gtk::Orientation::Vertical, 7);
+fn status_tile(title: &str, kind: UiIcon) -> (gtk::Box, gtk::Label) {
+    let tile = gtk::Box::new(gtk::Orientation::Vertical, 5);
     tile.add_css_class("card");
     tile.set_margin_bottom(4);
+    tile.set_size_request(250, -1);
     let heading_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
-    heading_line.set_margin_top(14);
+    heading_line.set_margin_top(12);
     heading_line.set_margin_start(14);
     heading_line.set_margin_end(14);
-    let icon = gtk::Image::from_icon_name(icon_name);
+    let icon = vector_icon(kind);
     icon.add_css_class("dim-label");
     let heading = gtk::Label::new(Some(title));
     heading.add_css_class("caption");
@@ -539,20 +659,20 @@ fn status_tile(title: &str, icon_name: &str) -> (gtk::Box, gtk::Label) {
     value.set_xalign(0.0);
     value.set_margin_start(14);
     value.set_margin_end(14);
-    value.set_margin_bottom(14);
+    value.set_margin_bottom(12);
     tile.append(&value);
     (tile, value)
 }
 
 fn info_card(title: &str, subtitle: &str) -> gtk::Box {
-    let card = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 5);
     card.add_css_class("card");
     card.set_margin_bottom(4);
-    card.set_spacing(10);
+    card.set_spacing(6);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 5);
-    body.set_margin_top(14);
-    body.set_margin_bottom(8);
+    body.set_margin_top(10);
+    body.set_margin_bottom(4);
     body.set_margin_start(16);
     body.set_margin_end(16);
     let heading = gtk::Label::new(Some(title));
@@ -568,6 +688,17 @@ fn info_card(title: &str, subtitle: &str) -> gtk::Box {
     detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     body.append(&detail);
     card.append(&body);
+    card
+}
+
+fn repair_card(title: &str, subtitle: &str, action: &gtk::Button) -> gtk::Box {
+    let card = info_card(title, subtitle);
+    card.add_css_class("warning");
+    action.set_halign(gtk::Align::End);
+    action.set_margin_start(16);
+    action.set_margin_end(16);
+    action.set_margin_bottom(12);
+    card.append(action);
     card
 }
 
@@ -592,9 +723,9 @@ fn button(label: &str, suggested: bool) -> gtk::Button {
 }
 
 fn page(title: &str, subtitle: &str) -> gtk::Box {
-    let content = gtk::Box::new(gtk::Orientation::Vertical, 20);
-    content.set_margin_top(28);
-    content.set_margin_bottom(28);
+    let content = gtk::Box::new(gtk::Orientation::Vertical, 16);
+    content.set_margin_top(22);
+    content.set_margin_bottom(20);
     content.set_margin_start(18);
     content.set_margin_end(18);
     let heading = gtk::Label::new(Some(title));
@@ -710,25 +841,19 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     sidebar.set_size_request(190, -1);
     sidebar.add_css_class("navigation-sidebar");
     let nav_entries = [
-        (t("Pulpit", "Dashboard"), "view-dashboard-symbolic"),
-        (
-            t("Instalacja", "Installation"),
-            "system-software-install-symbolic",
-        ),
-        (
-            t("Dodatki Plasma", "Plasma Addons"),
-            "application-x-addon-symbolic",
-        ),
-        (t("Automatyzacja", "Automation"), "alarm-symbolic"),
-        (t("Dziennik", "Log"), "text-x-generic-symbolic"),
+        (t("Pulpit", "Dashboard"), UiIcon::Dashboard),
+        (t("Instalacja", "Installation"), UiIcon::Install),
+        (t("Dodatki Plasma", "Plasma Addons"), UiIcon::Addons),
+        (t("Automatyzacja", "Automation"), UiIcon::Schedule),
+        (t("Dziennik", "Log"), UiIcon::Journal),
     ];
-    for (label, icon_name) in nav_entries {
+    for (label, kind) in nav_entries {
         let item = gtk::Box::new(gtk::Orientation::Horizontal, 10);
         item.set_margin_start(12);
         item.set_margin_end(12);
         item.set_margin_top(10);
         item.set_margin_bottom(10);
-        item.append(&gtk::Image::from_icon_name(icon_name));
+        item.append(&vector_icon(kind));
         let text = gtk::Label::new(Some(label));
         text.set_xalign(0.0);
         item.append(&text);
@@ -816,24 +941,23 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     tiles.set_row_spacing(12);
     tiles.set_homogeneous(true);
     let (environment_tile, environment_value) =
-        status_tile(t("Bazzite KDE", "Bazzite KDE"), "computer-symbolic");
-    let (updater_tile, updater_value) =
-        status_tile("plasmoid-updater", "system-software-update-symbolic");
-    let (agent_tile, agent_value) = status_tile(
-        t("Agent aktualizacji", "Update agent"),
-        "emblem-synchronizing-symbolic",
-    );
-    let (timer_tile, timer_value) = status_tile(t("Harmonogram", "Schedule"), "alarm-symbolic");
+        status_tile(t("Bazzite KDE", "Bazzite KDE"), UiIcon::Computer);
+    let (updater_tile, updater_value) = status_tile("plasmoid-updater", UiIcon::Updater);
+    let (agent_tile, agent_value) =
+        status_tile(t("Agent aktualizacji", "Update agent"), UiIcon::Agent);
+    let (timer_tile, timer_value) = status_tile(t("Harmonogram", "Schedule"), UiIcon::Schedule);
     for tile in [&environment_tile, &updater_tile, &agent_tile, &timer_tile] {
         tiles.insert(tile, -1);
     }
     dashboard.append(&tiles);
 
     let repair_button = button(t("Napraw agenta", "Repair agent"), true);
-    let repair_notice = action_row(
+    let repair_notice = repair_card(
         t("Agent wymaga aktualizacji", "Update agent needs repair"),
-        t("Zainstalowany agent nie odpowiada wersji instalatora. Naprawa wymienia tylko binarkę agenta, nie zmienia timera ani ustawień.",
-          "The agent does not match the installer version. Repair replaces only the agent binary, keeping your timer and settings."),
+        t(
+            "Bezpiecznie uaktualnij agenta. Harmonogram i ustawienia pozostaną bez zmian.",
+            "Update the agent safely. Your schedule and settings will stay unchanged.",
+        ),
         &repair_button,
     );
     repair_notice.set_visible(backend::agent_needs_repair());
@@ -1041,8 +1165,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     automation.set_wrap(true);
     automation.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     automation.set_selectable(true);
-    automation.set_margin_top(14);
-    automation.set_margin_bottom(14);
+    automation.set_margin_top(10);
+    automation.set_margin_bottom(10);
     automation.set_margin_start(16);
     automation.set_margin_end(16);
     let automation_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
@@ -1056,7 +1180,6 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     let behavior_group = adw::PreferencesGroup::new();
     behavior_group.set_title(t("Dodatki i powiadomienia", "Addons and notifications"));
     let migration_group = adw::PreferencesGroup::new();
-    migration_group.set_title(t("Ustawienia zaawansowane", "Advanced settings"));
     let apply_group = adw::PreferencesGroup::new();
     apply_group.set_title(t("Zapis i testowanie", "Save and test"));
     let initial = match backend::home().and_then(|h| backend::initial_settings(&h)) {
@@ -1116,7 +1239,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     );
     frequency.set_margin_start(16);
     frequency.set_margin_end(16);
-    frequency.set_margin_bottom(14);
+    frequency.set_margin_bottom(10);
     frequency_row.append(&frequency);
     settings_group.add(&frequency_row);
 
@@ -1180,7 +1303,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     exclusions.set_hexpand(true);
     exclusions.set_margin_start(16);
     exclusions.set_margin_end(16);
-    exclusions.set_margin_bottom(14);
+    exclusions.set_margin_bottom(10);
     let exclusions_card = info_card(
         t("Wykluczone dodatki", "Excluded addons"),
         t(
@@ -1211,7 +1334,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     apply_group.add(&save_row);
 
     let test_button = button(t("Przetestuj", "Test"), false);
-    apply_group.add(&action_row(
+    let tests = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    tests.append(&action_row(
         t("Test końcowy konfiguracji", "Configuration check"),
         t(
             "Sprawdza TOML, narzędzia, agenta, systemd oraz dry-run bez zmian w dodatkach",
@@ -1220,7 +1344,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
         &test_button,
     ));
     let run_service_button = button(t("Uruchom teraz", "Run now"), false);
-    apply_group.add(&action_row(
+    tests.append(&action_row(
         t(
             "Przetestuj pełny cykl aktualizacji",
             "Run a full update cycle",
@@ -1231,9 +1355,19 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
         ),
         &run_service_button,
     ));
+    let tests_expander = gtk::Expander::new(Some(t(
+        "Testowanie i uruchamianie ręczne",
+        "Testing and manual execution",
+    )));
+    tests_expander.set_margin_top(6);
+    tests_expander.set_child(Some(&tests));
+    apply_group.add(&tests_expander);
+    let advanced_expander =
+        gtk::Expander::new(Some(t("Ustawienia zaawansowane", "Advanced settings")));
+    advanced_expander.set_child(Some(&migration_group));
     automation_page.append(&settings_group);
     automation_page.append(&behavior_group);
-    automation_page.append(&migration_group);
+    automation_page.append(&advanced_expander);
     automation_page.append(&apply_group);
     add_page(
         &stack,

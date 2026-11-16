@@ -34,7 +34,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.2'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.3'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -80,13 +80,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.2 >/dev/null 2>&1; then
-              echo "v0.5.2 already published; use a new version tag for another release."
+            if gh release view v0.5.3 >/dev/null 2>&1; then
+              echo "v0.5.3 already published; use a new version tag for another release."
             else
-              gh release create v0.5.2 dist/*.AppImage \
+              gh release create v0.5.3 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.2" \
-                --notes "Poprawiona nawigacja: zawsze widoczne pięć zakładek z ikonami i adaptacyjne menu. Kompaktowe karty działań, panel stanu instalacji i agenta z bezpiecznym przyciskiem naprawy. Uproszczony pasek postępu i automatyzacja, czytelniejsze komunikaty systemd. Minimalistyczny wybór języka PL/EN w nagłówku z trwałym zapisem wyboru."
+                --title "Bazzite Plasmoid Updater GUI v0.5.3" \
+                --notes "Poprawki interfejsu pod Bazzite KDE: niezależne od motywu systemu, wektorowe ikony nawigacji i stanu; czytelne karty, których opisy nie zasłaniają przycisków, w tym Napraw agenta; mniejsze odstępy, adaptacyjne kafelki oraz zwijane ustawienia zaawansowane i narzędzia testowe. Zachowano PL/EN i automatyczne aktualizacje systemd --user."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

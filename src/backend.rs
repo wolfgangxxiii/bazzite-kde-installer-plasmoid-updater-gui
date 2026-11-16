@@ -549,7 +549,9 @@ pub fn status_localized(english: bool) -> String {
             .unwrap_or_default()
             .to_uppercase()
             .contains("KDE");
-    let binary_status = find_existing_updater(&home)
+    let installed_updater = find_existing_updater(&home);
+    let updater_ok = installed_updater.is_some();
+    let binary_status = installed_updater
         .map(|(path, version)| format!("plasmoid-updater {version} ({})", path.display()))
         .unwrap_or_else(|| {
             if english {
@@ -578,7 +580,8 @@ pub fn status_localized(english: bool) -> String {
         if english { "disabled" } else { "wyłączony" }.into()
     };
     let upstream_config = upstream_config_path(&home);
-    let configuration = if upstream_config.is_file() {
+    let config_ok = upstream_config.is_file();
+    let configuration = if config_ok {
         if english {
             "present"
         } else {
@@ -589,7 +592,9 @@ pub fn status_localized(english: bool) -> String {
     } else {
         "brak"
     };
-    let agent = match agent_version(&home) {
+    let installed_agent = agent_version(&home);
+    let agent_ok = installed_agent.as_deref() == Some(env!("CARGO_PKG_VERSION"));
+    let agent = match installed_agent {
         Some(version) if version == env!("CARGO_PKG_VERSION") => {
             if english {
                 "ready".to_owned()
@@ -630,7 +635,7 @@ pub fn status_localized(english: bool) -> String {
         "wyłączony"
     };
     format!(
-        "{} Bazzite · {} KDE · {} x86_64\n{} curl · {} Homebrew · {} bsdtar · {} kpackagetool6\n{}\n{}: {} · Agent: {}\nTimer: {} · {}: {}{}",
+        "{} Bazzite · {} KDE · {} x86_64\n{} curl · {} Homebrew · {} bsdtar · {} kpackagetool6\n{} {}\n{} {}: {} · {} Agent: {}\n{} Timer: {} · {}: {}{}",
         if bazzite { "✓" } else { "!" },
         if kde { "✓" } else { "!" },
         if env::consts::ARCH == "x86_64" { "✓" } else { "!" },
@@ -642,10 +647,14 @@ pub fn status_localized(english: bool) -> String {
         } else {
             "!"
         },
+        if updater_ok { "✓" } else { "!" },
         binary_status,
+        if config_ok { "✓" } else { "!" },
         if english { "Configuration" } else { "Konfiguracja" },
         configuration,
+        if agent_ok { "✓" } else { "!" },
         agent,
+        if active { "✓" } else { "!" },
         timer,
         if english { "next run" } else { "następny termin" },
         next,

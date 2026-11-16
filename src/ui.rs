@@ -51,9 +51,11 @@ struct UiParts {
     buttons: Rc<Vec<gtk::Button>>,
     settings_inputs: Rc<Vec<gtk::Widget>>,
     busy: Rc<Cell<bool>>,
+    status_generation: Rc<Cell<u64>>,
     inventory: Rc<RefCell<Vec<InstalledAddon>>>,
     partial_system: Rc<Cell<bool>>,
     updates: Rc<RefCell<Vec<AvailableAddonUpdate>>>,
+    update_overview: Rc<RefCell<Option<UpdateOverview>>>,
     inventory_list: gtk::ListBox,
     updates_list: gtk::ListBox,
     inventory_count: gtk::Label,
@@ -68,12 +70,63 @@ struct UiParts {
     repair_notice: gtk::Box,
 }
 
+struct ViewState {
+    width: i32,
+    height: i32,
+    maximized: bool,
+    inventory: Vec<InstalledAddon>,
+    partial_system: bool,
+    updates: Option<UpdateOverview>,
+    search: String,
+    scope: u32,
+    log: String,
+}
+
 fn english() -> bool {
     Language::selected() == Language::English
 }
 
 fn refresh_status(parts: &UiParts) {
-    let summary = backend::dashboard_summary();
+    // Several systemctl and --version calls are required for this report.
+    // Never run them on the GTK event loop; ignore outdated refresh results.
+    let generation = parts.status_generation.get().wrapping_add(1);
+    parts.status_generation.set(generation);
+    let is_english = english();
+    let (sender, receiver) = mpsc::channel();
+    std::thread::spawn(move || {
+        let summary = backend::dashboard_summary();
+        let status = backend::status_localized(is_english);
+        let automation = backend::automation_report_localized(is_english);
+        let _ = sender.send((summary, status, automation));
+    });
+    let parts = parts.clone();
+    glib::timeout_add_local(Duration::from_millis(120), move || match receiver.try_recv() {
+        Ok((summary, status, automation)) => {
+            if parts.status_generation.get() == generation {
+                apply_status(&parts, summary, &status, &automation);
+            }
+            glib::ControlFlow::Break
+        }
+        Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+        Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
+    });
+}
+
+fn apply_status(
+    parts: &UiParts,
+    summary: backend::DashboardSummary,
+    status: &str,
+    automation: &str,
+) {
+    let repair_needed = summary.agent_managed
+        && summary.agent_version.as_deref() != Some(env!("CARGO_PKG_VERSION"));
+    parts.environment_value.remove_css_class("success");
+    parts.environment_value.remove_css_class("warning");
+    parts.environment_value.add_css_class(if summary.environment_ready {
+        "success"
+    } else {
+        "warning"
+    });
     parts
         .environment_value
         .set_text(if summary.environment_ready {
@@ -99,16 +152,12 @@ fn refresh_status(parts: &UiParts) {
     } else {
         t("Nieaktywny", "Inactive")
     });
-    parts
-        .repair_notice
-        .set_visible(backend::agent_needs_repair());
+    parts.repair_notice.set_visible(repair_needed);
     parts
         .repair_button
-        .set_sensitive(backend::agent_needs_repair());
-    parts.status.set_text(&backend::status_localized(english()));
-    parts
-        .automation
-        .set_text(&backend::automation_report_localized(english()));
+        .set_sensitive(repair_needed && !parts.busy.get());
+    parts.status.set_text(status);
+    parts.automation.set_text(automation);
 }
 
 fn append_log(buffer: &gtk::TextBuffer, message: &str) {
@@ -246,6 +295,7 @@ fn render_inventory(parts: &UiParts) {
 }
 
 fn render_updates(parts: &UiParts, overview: UpdateOverview) {
+    *parts.update_overview.borrow_mut() = Some(overview.clone());
     clear_list(&parts.updates_list);
     parts.updates_count.set_text(&format!(
         "{} {} · {} {} · {} {} · {} {}",
@@ -289,7 +339,8 @@ fn render_updates(parts: &UiParts, overview: UpdateOverview) {
             .subtitle(issue.reason)
             .build();
         row.add_css_class("error");
-        let warning = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        let warning = vector_icon(UiIcon::Warning);
+        warning.add_css_class("error");
         row.add_prefix(&warning);
         parts.updates_list.append(&row);
     }
@@ -414,7 +465,6 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                     parts.cancel_button.set_sensitive(false);
                     parts.cancel_button.set_visible(false);
                     *parts.cancel_token.borrow_mut() = None;
-                    refresh_status(&parts);
                     for button in parts.buttons.iter() {
                         button.set_sensitive(true);
                     }
@@ -422,12 +472,16 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                         input.set_sensitive(true);
                     }
                     parts.busy.set(false);
+                    // Keep this action disabled until the fresh agent status arrives.
+                    parts.repair_button.set_sensitive(false);
+                    refresh_status(&parts);
                     if succeeded && matches!(task, Task::Operation(Job::Save { .. })) {
                         parts.dirty.set(false);
                         parts.unsaved.set_visible(false);
                     }
                     if matches!(task, Task::Operation(Job::Update | Job::RunService)) {
                         parts.updates.borrow_mut().clear();
+                        parts.update_overview.borrow_mut().take();
                         clear_list(&parts.updates_list);
                         parts.updates_count.set_text(t(
                             "Po aktualizacji sprawdź dostępne wersje ponownie.",
@@ -481,6 +535,9 @@ enum UiIcon {
     Computer,
     Updater,
     Agent,
+    Menu,
+    Refresh,
+    Warning,
 }
 
 fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
@@ -578,6 +635,33 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
                 cr.line_to(11.0, 15.0);
                 cr.line_to(16.0, 9.0);
             }
+            UiIcon::Menu => {
+                for y in [6.0, 12.0, 18.0] {
+                    cr.move_to(4.0, y);
+                    cr.line_to(20.0, y);
+                }
+            }
+            UiIcon::Refresh => {
+                cr.arc(12.0, 12.0, 8.0, 3.75, 6.25);
+                cr.move_to(19.0, 3.0);
+                cr.line_to(20.0, 8.0);
+                cr.line_to(15.0, 7.0);
+                cr.new_sub_path();
+                cr.arc(12.0, 12.0, 8.0, 0.6, 3.1);
+                cr.move_to(5.0, 21.0);
+                cr.line_to(4.0, 16.0);
+                cr.line_to(9.0, 17.0);
+            }
+            UiIcon::Warning => {
+                cr.move_to(12.0, 3.0);
+                cr.line_to(22.0, 21.0);
+                cr.line_to(2.0, 21.0);
+                cr.close_path();
+                cr.move_to(12.0, 9.0);
+                cr.line_to(12.0, 14.0);
+                cr.move_to(12.0, 18.0);
+                cr.line_to(12.0, 18.1);
+            }
         }
         let _ = cr.stroke();
     });
@@ -630,6 +714,7 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
         "orientation",
         Some(&gtk::Orientation::Vertical.to_value()),
     );
+    narrow.add_setter(button, "halign", Some(&gtk::Align::Fill.to_value()));
     adaptive.add_breakpoint(narrow);
     adaptive
 }
@@ -638,7 +723,8 @@ fn status_tile(title: &str, kind: UiIcon) -> (gtk::Box, gtk::Label) {
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 5);
     tile.add_css_class("card");
     tile.set_margin_bottom(4);
-    tile.set_size_request(250, -1);
+    // Let FlowBox shrink to a single column on narrow and scaled desktops.
+    tile.set_hexpand(true);
     let heading_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
     heading_line.set_margin_top(12);
     heading_line.set_margin_start(14);
@@ -714,7 +800,13 @@ fn switch_row(title: &str, subtitle: &str, active: bool) -> adw::SwitchRow {
 }
 
 fn button(label: &str, suggested: bool) -> gtk::Button {
-    let button = gtk::Button::with_label(label);
+    let button = gtk::Button::new();
+    let text = gtk::Label::new(Some(label));
+    text.set_wrap(true);
+    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    text.set_justify(gtk::Justification::Center);
+    text.set_max_width_chars(28);
+    button.set_child(Some(&text));
     button.set_valign(gtk::Align::Center);
     if suggested {
         button.add_css_class("suggested-action");
@@ -762,18 +854,24 @@ fn add_page(stack: &gtk::Stack, key: &str, title: &str, content: &gtk::Box) {
 }
 
 pub fn build(app: &adw::Application) {
-    build_with_page(app, "dashboard");
+    build_with_page(app, "dashboard", None);
 }
 
-fn build_with_page(app: &adw::Application, initial_page: &str) {
+fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Option<ViewState>) {
+    let initial_width = initial_state
+        .as_ref()
+        .map_or(1020, |state| state.width.max(420));
+    let initial_height = initial_state
+        .as_ref()
+        .map_or(740, |state| state.height.max(480));
     let window = adw::ApplicationWindow::builder()
         .application(app)
         .title(t(
             "Instalator plasmoid-updater • Bazzite",
             "Plasmoid Updater Installer • Bazzite",
         ))
-        .default_width(1020)
-        .default_height(740)
+        .default_width(initial_width)
+        .default_height(initial_height)
         .build();
 
     let overlay = adw::ToastOverlay::new();
@@ -787,14 +885,15 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     );
     header.set_title_widget(Some(&header_title));
     let navigation_toggle = gtk::ToggleButton::new();
-    navigation_toggle.set_icon_name("open-menu-symbolic");
+    navigation_toggle.set_child(Some(&vector_icon(UiIcon::Menu)));
     navigation_toggle.set_active(true);
     navigation_toggle.set_tooltip_text(Some(t(
         "Pokaż lub ukryj menu nawigacji",
         "Show or hide navigation",
     )));
     header.pack_start(&navigation_toggle);
-    let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
+    let refresh = gtk::Button::new();
+    refresh.set_child(Some(&vector_icon(UiIcon::Refresh)));
     refresh.set_tooltip_text(Some(t(
         "Odśwież stan instalacji",
         "Refresh installation status",
@@ -876,43 +975,39 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
         .child(&sidebar)
         .build();
     navigation.append(&nav_scroll);
-    let sidebar_revealer = gtk::Revealer::new();
-    sidebar_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
-    sidebar_revealer.set_reveal_child(true);
-    sidebar_revealer.set_child(Some(&navigation));
-    let sidebar_separator = gtk::Separator::new(gtk::Orientation::Vertical);
-    let revealer_for_toggle = sidebar_revealer.clone();
+    // When collapsed, libadwaita overlays the sidebar instead of shrinking the
+    // content area by another 190px. It also handles sidebar reveal gestures.
+    let split_view = adw::OverlaySplitView::new();
+    split_view.set_sidebar(Some(&navigation));
+    split_view.set_content(Some(&stack));
+    split_view.set_min_sidebar_width(190.0);
+    split_view.set_max_sidebar_width(240.0);
+    split_view.set_show_sidebar(true);
+    let split_for_toggle = split_view.clone();
     navigation_toggle.connect_toggled(move |toggle| {
-        revealer_for_toggle.set_reveal_child(toggle.is_active());
+        split_for_toggle.set_show_sidebar(toggle.is_active());
     });
     let toggle_for_revealer = navigation_toggle.clone();
-    let separator_for_revealer = sidebar_separator.clone();
-    sidebar_revealer.connect_reveal_child_notify(move |revealer| {
-        separator_for_revealer.set_visible(revealer.reveals_child());
-        if toggle_for_revealer.is_active() != revealer.reveals_child() {
-            toggle_for_revealer.set_active(revealer.reveals_child());
+    split_view.connect_show_sidebar_notify(move |view| {
+        if toggle_for_revealer.is_active() != view.shows_sidebar() {
+            toggle_for_revealer.set_active(view.shows_sidebar());
         }
     });
 
-    let revealer_for_page = sidebar_revealer.clone();
-    let window_for_page = window.clone();
+    let split_for_page = split_view.clone();
     stack.connect_visible_child_name_notify(move |_| {
-        if window_for_page.width() <= 820 {
-            revealer_for_page.set_reveal_child(false);
+        if split_for_page.is_collapsed() {
+            split_for_page.set_show_sidebar(false);
         }
     });
 
-    let layout = gtk::Box::new(gtk::Orientation::Horizontal, 0);
-    layout.append(&sidebar_revealer);
-    layout.append(&sidebar_separator);
-    layout.append(&stack);
     let adaptive_layout = adw::BreakpointBin::new();
-    adaptive_layout.set_child(Some(&layout));
+    adaptive_layout.set_child(Some(&split_view));
     let narrow = adw::Breakpoint::new(
         adw::BreakpointCondition::parse("max-width: 820px")
             .expect("Prawidłowy warunek szerokości okna"),
     );
-    narrow.add_setter(&sidebar_revealer, "reveal-child", Some(&false.to_value()));
+    narrow.add_setter(&split_view, "collapsed", Some(&true.to_value()));
     adaptive_layout.add_breakpoint(narrow);
     toolbar.set_content(Some(&adaptive_layout));
     overlay.set_child(Some(&toolbar));
@@ -925,13 +1020,6 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
             "Install, configure and monitor KDE addon updates in one place.",
         ),
     );
-
-    let welcome = info_card(
-        t("Zacznij w trzech krokach", "Get started in three steps"),
-        t("1. Sprawdź środowisko i zainstaluj plasmoid-updater.\n2. Przejrzyj dodatki Plasma i dostępne aktualizacje.\n3. W Automatyzacji ustaw harmonogram i przetestuj konfigurację.",
-          "1. Check your system and install plasmoid-updater.\n2. Review installed Plasma addons and available updates.\n3. Set a schedule in Automation and test the configuration."),
-    );
-    dashboard.append(&welcome);
 
     let tiles = gtk::FlowBox::new();
     tiles.set_selection_mode(gtk::SelectionMode::None);
@@ -951,6 +1039,18 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
     }
     dashboard.append(&tiles);
 
+    let first_steps = gtk::Expander::new(Some(t("Pierwsze kroki", "First steps")));
+    let steps = gtk::Label::new(Some(t(
+        "1. Sprawdź środowisko i zainstaluj plasmoid-updater.\n2. Przejrzyj dodatki Plasma i dostępne aktualizacje.\n3. W Automatyzacji ustaw harmonogram i przetestuj konfigurację.",
+        "1. Check your system and install plasmoid-updater.\n2. Review installed Plasma addons and available updates.\n3. Set a schedule in Automation and test the configuration.",
+    )));
+    steps.set_wrap(true);
+    steps.set_xalign(0.0);
+    steps.set_margin_top(8);
+    steps.set_margin_bottom(8);
+    first_steps.set_child(Some(&steps));
+    dashboard.append(&first_steps);
+
     let repair_button = button(t("Napraw agenta", "Repair agent"), true);
     let repair_notice = repair_card(
         t("Agent wymaga aktualizacji", "Update agent needs repair"),
@@ -960,7 +1060,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
         ),
         &repair_button,
     );
-    repair_notice.set_visible(backend::agent_needs_repair());
+    repair_notice.set_visible(false);
     dashboard.append(&repair_notice);
 
     let environment = adw::PreferencesGroup::new();
@@ -1501,9 +1601,11 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
             exclusions.clone().upcast(),
         ]),
         busy: Rc::new(Cell::new(false)),
+        status_generation: Rc::new(Cell::new(0)),
         inventory: Rc::new(RefCell::new(Vec::new())),
         partial_system: Rc::new(Cell::new(false)),
         updates: Rc::new(RefCell::new(Vec::new())),
+        update_overview: Rc::new(RefCell::new(None)),
         inventory_list,
         updates_list,
         inventory_count,
@@ -1517,6 +1619,20 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
         repair_button: repair_button.clone(),
         repair_notice,
     };
+    if let Some(saved) = initial_state {
+        *parts.inventory.borrow_mut() = saved.inventory;
+        parts.partial_system.set(saved.partial_system);
+        parts.inventory_search.set_text(&saved.search);
+        parts.inventory_scope.set_selected(saved.scope);
+        render_inventory(&parts);
+        if let Some(overview) = saved.updates {
+            render_updates(&parts, overview);
+        }
+        parts.output.set_text(&saved.log);
+        if saved.maximized {
+            window.maximize();
+        }
+    }
     refresh_status(&parts);
     let refresh_parts = parts.clone();
     refresh.connect_clicked(move |_| {
@@ -1551,7 +1667,23 @@ fn build_with_page(app: &adw::Application, initial_page: &str) {
             .visible_child_name()
             .map(|name| name.to_string())
             .unwrap_or_else(|| "dashboard".into());
-        build_with_page(&app_language, &page);
+        let log = parts_language.output.text(
+            &parts_language.output.start_iter(),
+            &parts_language.output.end_iter(),
+            true,
+        );
+        let state = ViewState {
+            width: window_language.width(),
+            height: window_language.height(),
+            maximized: window_language.is_maximized(),
+            inventory: parts_language.inventory.borrow().clone(),
+            partial_system: parts_language.partial_system.get(),
+            updates: parts_language.update_overview.borrow().clone(),
+            search: parts_language.inventory_search.text().to_string(),
+            scope: parts_language.inventory_scope.selected(),
+            log: log.to_string(),
+        };
+        build_with_page(&app_language, &page, Some(state));
         window_language.close();
     });
     let search_parts = parts.clone();

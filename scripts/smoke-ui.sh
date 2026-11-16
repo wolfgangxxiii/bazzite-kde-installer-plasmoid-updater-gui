@@ -9,9 +9,13 @@ trap 'if [[ -n "$app_pid" ]]; then kill -TERM -- "-$app_pid" 2>/dev/null || true
 capture_page() {
   local page="$1" width="$2" height="$3" label="$4"
   local window_id=""
-  local expand_tests=0
-  if [[ "$label" == narrow-automation-tests ]]; then
+  local expand_tests=0 expand_advanced=0 expand_dashboard=0
+  if [[ "$label" == narrow-automation-tests || "$label" == desktop-automation-tests ]]; then
     expand_tests=1
+  elif [[ "$label" == narrow-automation-advanced ]]; then
+    expand_advanced=1
+  elif [[ "$label" == narrow-dashboard-expanders ]]; then
+    expand_dashboard=1
   fi
 
   # An explicit initial page is deterministic across font themes and scaling.
@@ -19,7 +23,10 @@ capture_page() {
   # lets us terminate the entire tree; otherwise the next GTK instance exits
   # after forwarding activation to the still-running first window.
   setsid env BAZZITE_GUI_SMOKE_PAGE="$page" \
-    BAZZITE_GUI_SMOKE_EXPAND_TESTS="$expand_tests" APPIMAGE_EXTRACT_AND_RUN=1 \
+    BAZZITE_GUI_SMOKE_EXPAND_TESTS="$expand_tests" \
+    BAZZITE_GUI_SMOKE_EXPAND_ADVANCED="$expand_advanced" \
+    BAZZITE_GUI_SMOKE_EXPAND_DASHBOARD="$expand_dashboard" \
+    APPIMAGE_EXTRACT_AND_RUN=1 \
     GDK_BACKEND=x11 G_DEBUG=fatal-criticals \
     "$APPIMAGE" >"ui-smoke/${label}.log" 2>&1 &
   app_pid=$!
@@ -51,8 +58,8 @@ capture_page() {
     sed -n '1,100p' "ui-smoke/${label}.log" >&2
     exit 1
   fi
-  if [[ "$expand_tests" == 1 ]]; then
-    # Scroll to the bottom of the expanded tests to exercise both actions.
+  if [[ "$expand_tests" == 1 || "$expand_advanced" == 1 || "$expand_dashboard" == 1 ]]; then
+    # Scroll through opened panels and verify their contents are accessible.
     xdotool mousemove --window "$window_id" 330 410 click --repeat 20 --delay 50 5
     sleep 0.5
   fi
@@ -78,4 +85,7 @@ for page in dashboard installation addons automation journal; do
 done
 capture_page automation 540 720 narrow-automation
 capture_page automation 540 720 narrow-automation-tests
+capture_page automation 540 720 narrow-automation-advanced
+capture_page dashboard 540 720 narrow-dashboard-expanders
+capture_page automation 1020 740 desktop-automation-tests
 capture_page installation 540 720 narrow-installation

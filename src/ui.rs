@@ -543,6 +543,8 @@ enum UiIcon {
     Agent,
     Menu,
     Refresh,
+    ChevronDown,
+    ChevronUp,
     Warning,
 }
 
@@ -648,15 +650,26 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
                 }
             }
             UiIcon::Refresh => {
-                cr.arc(12.0, 12.0, 8.0, 3.75, 6.25);
-                cr.move_to(19.0, 3.0);
-                cr.line_to(20.0, 8.0);
-                cr.line_to(15.0, 7.0);
+                // Balanced opposing arcs, with both arrowheads inside 24x24.
+                cr.arc(12.0, 12.0, 8.0, 3.85, 6.0);
+                cr.move_to(17.0, 3.0);
+                cr.line_to(20.0, 6.0);
+                cr.line_to(15.0, 6.0);
                 cr.new_sub_path();
-                cr.arc(12.0, 12.0, 8.0, 0.6, 3.1);
-                cr.move_to(5.0, 21.0);
-                cr.line_to(4.0, 16.0);
-                cr.line_to(9.0, 17.0);
+                cr.arc(12.0, 12.0, 8.0, 0.7, 2.85);
+                cr.move_to(7.0, 21.0);
+                cr.line_to(4.0, 18.0);
+                cr.line_to(9.0, 18.0);
+            }
+            UiIcon::ChevronDown => {
+                cr.move_to(5.0, 9.0);
+                cr.line_to(12.0, 16.0);
+                cr.line_to(19.0, 9.0);
+            }
+            UiIcon::ChevronUp => {
+                cr.move_to(5.0, 15.0);
+                cr.line_to(12.0, 8.0);
+                cr.line_to(19.0, 15.0);
             }
             UiIcon::Warning => {
                 cr.move_to(12.0, 3.0);
@@ -679,7 +692,7 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
 fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::BreakpointBin {
     let card = gtk::Box::new(gtk::Orientation::Horizontal, 12);
     card.add_css_class("card");
-    card.set_margin_bottom(4);
+    card.set_margin_bottom(10);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 3);
     body.set_hexpand(true);
@@ -729,7 +742,7 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
 fn status_tile(title: &str, kind: UiIcon) -> (gtk::Box, gtk::Label) {
     let tile = gtk::Box::new(gtk::Orientation::Vertical, 5);
     tile.add_css_class("card");
-    tile.set_margin_bottom(4);
+    tile.set_margin_bottom(0);
     // Let FlowBox shrink to a single column on narrow and scaled desktops.
     tile.set_hexpand(true);
     let heading_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -760,7 +773,7 @@ fn status_tile(title: &str, kind: UiIcon) -> (gtk::Box, gtk::Label) {
 fn info_card(title: &str, subtitle: &str) -> gtk::Box {
     let card = gtk::Box::new(gtk::Orientation::Vertical, 5);
     card.add_css_class("card");
-    card.set_margin_bottom(4);
+    card.set_margin_bottom(10);
     card.set_spacing(6);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 5);
@@ -795,6 +808,58 @@ fn test_action_card(title: &str, subtitle: &str, action: &gtk::Button) -> gtk::B
     action.set_margin_end(16);
     action.set_margin_bottom(12);
     card.append(action);
+    card
+}
+
+// One predictable, theme-independent expander for every page. The toggle
+// exposes a large click target and our own drawn chevron; GtkExpander and
+// AdwExpanderRow used different (sometimes missing) icon-theme assets.
+fn expander_card(title: &str, child: &impl IsA<gtk::Widget>, expanded: bool) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    card.add_css_class("card");
+    card.set_margin_bottom(6);
+
+    let toggle = gtk::ToggleButton::new();
+    toggle.add_css_class("flat");
+    toggle.set_hexpand(true);
+    toggle.set_halign(gtk::Align::Fill);
+    toggle.set_tooltip_text(Some(title));
+    let heading = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    heading.set_margin_start(16);
+    heading.set_margin_end(16);
+    heading.set_margin_top(12);
+    heading.set_margin_bottom(12);
+    let text = gtk::Label::new(Some(title));
+    text.set_xalign(0.0);
+    text.set_wrap(true);
+    text.set_hexpand(true);
+    heading.append(&text);
+    let arrows = gtk::Stack::new();
+    arrows.set_transition_type(gtk::StackTransitionType::None);
+    arrows.add_named(&vector_icon(UiIcon::ChevronDown), Some("down"));
+    arrows.add_named(&vector_icon(UiIcon::ChevronUp), Some("up"));
+    arrows.set_visible_child_name(if expanded { "up" } else { "down" });
+    heading.append(&arrows);
+    toggle.set_child(Some(&heading));
+    card.append(&toggle);
+
+    let contents = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    contents.set_margin_start(12);
+    contents.set_margin_end(12);
+    contents.set_margin_bottom(12);
+    contents.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    contents.append(child);
+    let revealer = gtk::Revealer::new();
+    revealer.set_transition_type(gtk::RevealerTransitionType::SlideDown);
+    revealer.set_child(Some(&contents));
+    revealer.set_reveal_child(expanded);
+    toggle.set_active(expanded);
+    card.append(&revealer);
+    toggle.connect_toggled(move |toggle| {
+        let open = toggle.is_active();
+        revealer.set_reveal_child(open);
+        arrows.set_visible_child_name(if open { "up" } else { "down" });
+    });
     card
 }
 
@@ -1007,6 +1072,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     header.set_title_widget(Some(&header_title));
     let navigation_toggle = gtk::ToggleButton::new();
     navigation_toggle.set_child(Some(&vector_icon(UiIcon::Menu)));
+    navigation_toggle.set_size_request(36, 36);
     navigation_toggle.set_active(true);
     navigation_toggle.set_tooltip_text(Some(t(
         "Pokaż lub ukryj menu nawigacji",
@@ -1014,13 +1080,19 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     )));
     header.pack_start(&navigation_toggle);
     let refresh = gtk::Button::new();
-    refresh.set_child(Some(&vector_icon(UiIcon::Refresh)));
+    let refresh_icon = vector_icon(UiIcon::Refresh);
+    refresh_icon.set_halign(gtk::Align::Center);
+    refresh_icon.set_valign(gtk::Align::Center);
+    refresh.set_child(Some(&refresh_icon));
+    refresh.set_size_request(36, 36);
+    refresh.set_valign(gtk::Align::Center);
     refresh.set_tooltip_text(Some(t(
         "Odśwież stan instalacji",
         "Refresh installation status",
     )));
     header.pack_end(&refresh);
     let language_choice = gtk::DropDown::from_strings(&["PL", "EN"]);
+    language_choice.set_height_request(36);
     language_choice.set_selected(Language::selected().index());
     language_choice.set_tooltip_text(Some(t("Język interfejsu", "Interface language")));
     header.pack_end(&language_choice);
@@ -1152,8 +1224,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     tiles.set_selection_mode(gtk::SelectionMode::None);
     tiles.set_min_children_per_line(1);
     tiles.set_max_children_per_line(2);
-    tiles.set_column_spacing(12);
-    tiles.set_row_spacing(12);
+    tiles.set_column_spacing(16);
+    tiles.set_row_spacing(16);
     tiles.set_homogeneous(true);
     let (environment_tile, environment_value) =
         status_tile(t("Bazzite KDE", "Bazzite KDE"), UiIcon::Computer);
@@ -1166,7 +1238,6 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     }
     dashboard.append(&tiles);
 
-    let first_steps = gtk::Expander::new(Some(t("Pierwsze kroki", "First steps")));
     let steps = gtk::Label::new(Some(t(
         "1. Sprawdź środowisko i zainstaluj plasmoid-updater.\n2. Przejrzyj dodatki Plasma i dostępne aktualizacje.\n3. W Automatyzacji ustaw harmonogram i przetestuj konfigurację.",
         "1. Check your system and install plasmoid-updater.\n2. Review installed Plasma addons and available updates.\n3. Set a schedule in Automation and test the configuration.",
@@ -1175,7 +1246,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     steps.set_xalign(0.0);
     steps.set_margin_top(8);
     steps.set_margin_bottom(8);
-    first_steps.set_child(Some(&steps));
+    let expand_dashboard = std::env::var("BAZZITE_GUI_SMOKE_EXPAND_DASHBOARD").as_deref() == Ok("1");
+    let first_steps = expander_card(t("Pierwsze kroki", "First steps"), &steps, expand_dashboard);
     dashboard.append(&first_steps);
 
     let repair_button = button(t("Napraw agenta", "Repair agent"), true);
@@ -1209,11 +1281,11 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     status.set_margin_top(8);
     status.set_margin_bottom(8);
     status.add_css_class("caption");
-    let diagnostics = gtk::Expander::new(Some(t(
-        "Szczegóły stanu i ścieżki",
-        "Status details and paths",
-    )));
-    diagnostics.set_child(Some(&status));
+    let diagnostics = expander_card(
+        t("Szczegóły stanu i ścieżki", "Status details and paths"),
+        &status,
+        expand_dashboard,
+    );
     environment.add(&diagnostics);
     dashboard.append(&environment);
     let footer = gtk::LinkButton::with_label(
@@ -1464,6 +1536,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
             "Missed runs are caught up after login, with up to 20 minutes of randomized delay",
         ),
     );
+    frequency_row.set_margin_top(12);
     frequency.set_margin_start(16);
     frequency.set_margin_end(16);
     frequency.set_margin_bottom(10);
@@ -1538,6 +1611,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
             "Components to skip during updates. Separate names with commas.",
         ),
     );
+    exclusions_card.set_margin_top(12);
     exclusions_card.append(&exclusions);
     behavior_group.add(&exclusions_card);
     let unsaved = gtk::Label::new(Some(t("Niezapisane zmiany", "Unsaved changes")));
@@ -1568,12 +1642,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     });
 
     let test_button = button(t("Przetestuj", "Test"), false);
-    let tests_expander = adw::ExpanderRow::new();
-    tests_expander.set_title(t(
-        "Testowanie i uruchamianie ręczne",
-        "Testing and manual execution",
-    ));
-    tests_expander.add_row(&test_action_card(
+    let tests = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    tests.append(&test_action_card(
         t("Test końcowy konfiguracji", "Configuration check"),
         t(
             "Sprawdza TOML, narzędzia, agenta, systemd oraz dry-run bez zmian w dodatkach",
@@ -1582,7 +1652,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         &test_button,
     ));
     let run_service_button = button(t("Uruchom teraz", "Run now"), false);
-    tests_expander.add_row(&test_action_card(
+    tests.append(&test_action_card(
         t(
             "Przetestuj pełny cykl aktualizacji",
             "Run a full update cycle",
@@ -1593,13 +1663,20 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         ),
         &run_service_button,
     ));
-    if std::env::var("BAZZITE_GUI_SMOKE_EXPAND_TESTS").as_deref() == Ok("1") {
-        tests_expander.set_expanded(true);
-    }
+    let tests_expander = expander_card(
+        t(
+            "Testowanie i uruchamianie ręczne",
+            "Testing and manual execution",
+        ),
+        &tests,
+        std::env::var("BAZZITE_GUI_SMOKE_EXPAND_TESTS").as_deref() == Ok("1"),
+    );
     apply_group.add(&tests_expander);
-    let advanced_expander =
-        gtk::Expander::new(Some(t("Ustawienia zaawansowane", "Advanced settings")));
-    advanced_expander.set_child(Some(&migration_group));
+    let advanced_expander = expander_card(
+        t("Ustawienia zaawansowane", "Advanced settings"),
+        &migration_group,
+        std::env::var("BAZZITE_GUI_SMOKE_EXPAND_ADVANCED").as_deref() == Ok("1"),
+    );
     automation_page.append(&settings_group);
     automation_page.append(&behavior_group);
     automation_page.append(&advanced_expander);

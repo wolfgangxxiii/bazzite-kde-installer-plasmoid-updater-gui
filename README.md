@@ -30,7 +30,8 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Odświeża status narzędzia i usług systemd poza głównym wątkiem, bez blokowania interfejsu. Zmiana PL/EN zachowuje rozmiar okna, wyniki skanowania, wyszukiwanie i dziennik.
 - Grupuje harmonogram i powiadomienia, a **ustawienia zaawansowane** oraz **testowanie i uruchamianie ręczne** umieszcza w zwijanych sekcjach. Pokazuje instrukcję pierwszych kroków, puste stany list i pasek postępu na dole okna.
 - Przycisk **Zapisz i zastosuj** pozostaje widoczny w dolnym pasku ekranu Automatyzacja podczas przewijania opcji. Pasek pokazuje również niezapisane zmiany.
-- Rozwijana sekcja **Testowanie i uruchamianie ręczne** używa natywnych wierszy libadwaita i kart z przyciskami pod opisem. Oba działania pozostają dostępne po rozwinięciu nawet w wąskim oknie.
+- Rozwijane sekcje **Testowanie i uruchamianie ręczne**, **Ustawienia zaawansowane**, **Pierwsze kroki** i **Szczegóły stanu i ścieżki** mają spójny wygląd, czytelną wektorową strzałkę i duży obszar klikania. Przyciski testowania znajdują się pod opisami i są dostępne w wąskim oknie.
+- Przyciski nagłówka mają wyrównane rozmiary, a odświeżanie ma wyśrodkowaną ikonę. Kafelki i osobne karty harmonogramu, powiadomień oraz instalacji zachowują odstępy.
 - AppImage odczytuje preferowany motyw kursora z ustawień GTK4 lub KDE Plasma, zachowując jawnie ustawione ścieżki `XCURSOR_PATH` i przeszukując motywy systemowe przed dołączonymi ikonami.
 - Na KDE Plasma program dodatkowo ustawia motyw i rozmiar kursora bezpośrednio w GTK, korzystając z `kcminputrc` (z fallbackiem do `gtk-4.0/settings.ini`). Pomaga to, gdy portal Wayland zgłasza GTK przestarzały motyw kursora.
 - Pokazuje dodatki rozpoznawane przez `plasmoid-updater list-installed --json` zarówno dla użytkownika, jak i z systemu (`--system list-installed --json` — **tylko odczyt**). Pozwala wyszukiwać i filtrować listę.
@@ -150,7 +151,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.5.7` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.5.8` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

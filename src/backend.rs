@@ -2,6 +2,7 @@ use crate::settings::Settings;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
 use std::io::{Read, Write};
@@ -21,10 +22,13 @@ const MANAGED: &str = "# Managed by Bazzite Plasmoid Updater GUI";
 #[derive(Clone, Copy, Debug)]
 pub enum Job {
     Install,
+    Diagnose,
+    Test,
+    RunService,
     Check,
     DryRun,
     Update,
-    Save,
+    Save { migrate_legacy: bool },
 }
 
 pub fn home() -> Result<PathBuf> {
@@ -36,6 +40,91 @@ pub fn home() -> Result<PathBuf> {
 
 fn updater_binary(home: &Path) -> PathBuf {
     home.join(".local/bin/plasmoid-updater")
+}
+
+fn upstream_config_path(home: &Path) -> PathBuf {
+    env::var_os("XDG_CONFIG_HOME")
+        .filter(|value| !value.is_empty())
+        .map(PathBuf::from)
+        .unwrap_or_else(|| home.join(".config"))
+        .join("plasmoid-updater.toml")
+}
+
+fn executable(path: &Path) -> bool {
+    path.is_file()
+        && fs::metadata(path)
+            .map(|metadata| metadata.permissions().mode() & 0o111 != 0)
+            .unwrap_or(false)
+}
+
+fn on_path(name: &str) -> Option<PathBuf> {
+    env::split_paths(&env::var_os("PATH")?)
+        .map(|dir| dir.join(name))
+        .find(|path| executable(path))
+}
+
+fn version_of(path: &Path) -> Option<String> {
+    let result = Command::new(path)
+        .arg("--version")
+        .stdin(Stdio::null())
+        .output()
+        .ok()?;
+    if !result.status.success() {
+        return None;
+    }
+    let version = String::from_utf8_lossy(&result.stdout);
+    let mut columns = version.split_whitespace();
+    if columns.next()? != "plasmoid-updater" {
+        return None;
+    }
+    columns.next().map(str::to_owned)
+}
+
+fn find_existing_updater(home: &Path) -> Option<(PathBuf, String)> {
+    let mut paths = vec![
+        updater_binary(home),
+        home.join(".cargo/bin/plasmoid-updater"),
+        PathBuf::from("/home/linuxbrew/.linuxbrew/bin/plasmoid-updater"),
+        PathBuf::from("/usr/local/bin/plasmoid-updater"),
+        PathBuf::from("/usr/bin/plasmoid-updater"),
+    ];
+    if let Some(path) = env::var_os("PATH") {
+        paths.extend(env::split_paths(&path).map(|dir| dir.join("plasmoid-updater")));
+    }
+    let mut seen = HashSet::new();
+    for path in paths {
+        if !seen.insert(path.clone()) || !executable(&path) {
+            continue;
+        }
+        if let Some(version) = version_of(&path) {
+            return Some((path, version));
+        }
+    }
+    None
+}
+
+pub fn initial_settings(home: &Path) -> Result<Settings> {
+    let mut settings = Settings::load(home)?;
+    let path = upstream_config_path(home);
+    if path.is_file() {
+        let doc: DocumentMut = fs::read_to_string(&path)?
+            .parse()
+            .with_context(|| format!("Nieprawidłowy TOML: {}", path.display()))?;
+        if let Some(packages) = doc
+            .get("excluded_packages")
+            .and_then(|item| item.as_array())
+        {
+            settings.excluded_packages = packages
+                .iter()
+                .map(|item| {
+                    item.as_str().map(str::to_owned).ok_or_else(|| {
+                        anyhow!("Nieprawidłowa lista excluded_packages w {}", path.display())
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+        }
+    }
+    Ok(settings)
 }
 
 fn agent_binary(home: &Path) -> PathBuf {
@@ -50,24 +139,55 @@ fn user_path(home: &Path) -> String {
     )
 }
 
+fn service_bsdtar_exists(home: &Path) -> bool {
+    executable(&home.join(".local/bin/bsdtar"))
+        || executable(Path::new("/usr/bin/bsdtar"))
+        || executable(Path::new(
+            "/home/linuxbrew/.linuxbrew/opt/libarchive/bin/bsdtar",
+        ))
+        || executable(Path::new("/usr/local/bin/bsdtar"))
+}
+
 fn bsdtar_exists(home: &Path) -> bool {
-    home.join(".local/bin/bsdtar").exists()
-        || Path::new("/usr/bin/bsdtar").exists()
-        || Path::new("/home/linuxbrew/.linuxbrew/opt/libarchive/bin/bsdtar").exists()
+    service_bsdtar_exists(home) || on_path("bsdtar").is_some()
 }
 
 fn install_missing_requirements(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
     anyhow::ensure!(
-        Path::new("/usr/bin/kpackagetool6").is_file(),
+        executable(Path::new("/usr/bin/kpackagetool6")) || on_path("kpackagetool6").is_some(),
         "Brakuje kpackagetool6. To składnik KDE systemu Bazzite, którego nie należy zastępować pakietem Homebrew."
     );
-    if bsdtar_exists(home) {
+    if service_bsdtar_exists(home) {
+        return Ok(());
+    }
+    if let Some(source) = on_path("bsdtar") {
+        let destination = home.join(".local/bin/bsdtar");
+        fs::create_dir_all(
+            destination
+                .parent()
+                .context("Nieprawidłowa ścieżka bsdtar")?,
+        )?;
+        if !destination.exists() {
+            symlink(&source, &destination)?;
+            log(&format!(
+                "Udostępniono istniejący bsdtar z {} dla usługi systemd.",
+                source.display()
+            ));
+        }
+        anyhow::ensure!(
+            service_bsdtar_exists(home),
+            "bsdtar nie jest dostępny dla systemd"
+        );
         return Ok(());
     }
     log("Nie znaleziono bsdtar. Instalowanie libarchive przez Homebrew…");
-    let brew = if Path::new("/home/linuxbrew/.linuxbrew/bin/brew").exists() {
+    let brew = if executable(Path::new("/home/linuxbrew/.linuxbrew/bin/brew")) {
         "/home/linuxbrew/.linuxbrew/bin/brew"
     } else {
+        anyhow::ensure!(
+            on_path("brew").is_some(),
+            "Brakuje Homebrew: zainstaluj brew albo bsdtar przed kontynuowaniem"
+        );
         "brew"
     };
     output(
@@ -91,7 +211,7 @@ fn install_missing_requirements(home: &Path, log: &mut dyn FnMut(&str)) -> Resul
         symlink(&source, &link).context("Nie można utworzyć dowiązania do bsdtar")?;
     }
     anyhow::ensure!(
-        bsdtar_exists(home),
+        service_bsdtar_exists(home),
         "Nie można znaleźć bsdtar po instalacji"
     );
     log("bsdtar został zainstalowany i jest dostępny dla agenta aktualizacji.");
@@ -113,6 +233,30 @@ fn output(command: &mut Command) -> Result<Output> {
     Ok(result)
 }
 
+fn user_unit_state(unit: &str, action: &str) -> bool {
+    Command::new("systemctl")
+        .args(["--user", action, "--quiet", unit])
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+fn legacy_timer_exists() -> bool {
+    user_unit_state("plasmoid-updater.timer", "is-enabled")
+        || user_unit_state("plasmoid-updater.timer", "is-active")
+}
+
+fn unit_property(unit: &str, property: &str) -> Option<String> {
+    let out = Command::new("systemctl")
+        .args(["--user", "show", "--value", "-p", property, unit])
+        .output()
+        .ok()?;
+    if !out.status.success() {
+        return None;
+    }
+    let value = String::from_utf8_lossy(&out.stdout).trim().to_owned();
+    (!value.is_empty() && value != "n/a" && value != "0").then_some(value)
+}
+
 pub fn status() -> String {
     let Ok(home) = home() else {
         return "Nie można ustalić katalogu domowego".to_owned();
@@ -124,37 +268,42 @@ pub fn status() -> String {
             .unwrap_or_default()
             .to_uppercase()
             .contains("KDE");
-    let updater = updater_binary(&home);
-    let binary_status = if updater.is_file() {
-        Command::new(&updater)
-            .arg("--version")
-            .output()
-            .ok()
-            .filter(|o| o.status.success())
-            .map(|o| String::from_utf8_lossy(&o.stdout).trim().to_owned())
-            .unwrap_or_else(|| "zainstalowany (nie można odczytać wersji)".into())
-    } else {
-        "niezainstalowany".to_owned()
-    };
+    let binary_status = find_existing_updater(&home)
+        .map(|(path, version)| format!("plasmoid-updater {version} ({})", path.display()))
+        .unwrap_or_else(|| "plasmoid-updater: nie znaleziono".to_owned());
     let bsdtar = bsdtar_exists(&home);
-    let enabled = Command::new("systemctl")
-        .args(["--user", "is-enabled", TIMER])
-        .output()
-        .ok()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
+    let enabled = user_unit_state(TIMER, "is-enabled");
+    let active = user_unit_state(TIMER, "is-active");
+    let next = if enabled {
+        unit_property(TIMER, "NextElapseUSecRealtime").unwrap_or_else(|| "brak danych".into())
+    } else {
+        "wyłączony".into()
+    };
+    let upstream_config = upstream_config_path(&home);
+    let configuration = if upstream_config.is_file() {
+        "istnieje"
+    } else {
+        "brak"
+    };
     format!(
-        "{} Bazzite  ·  {} KDE  ·  {} bsdtar  ·  {} kpackagetool6\n{}\nAutomatyzacja: {}",
+        "{} Bazzite · {} KDE · {} x86_64\n{} curl · {} Homebrew · {} bsdtar · {} kpackagetool6\n{}\nKonfiguracja: {} · Agent: {}\nTimer: {} · następny termin: {}{}",
         if bazzite { "✓" } else { "!" },
         if kde { "✓" } else { "!" },
+        if env::consts::ARCH == "x86_64" { "✓" } else { "!" },
+        if on_path("curl").is_some() { "✓" } else { "!" },
+        if on_path("brew").is_some() || executable(Path::new("/home/linuxbrew/.linuxbrew/bin/brew")) { "✓" } else { "!" },
         if bsdtar { "✓" } else { "!" },
-        if Path::new("/usr/bin/kpackagetool6").exists() {
+        if executable(Path::new("/usr/bin/kpackagetool6")) || on_path("kpackagetool6").is_some() {
             "✓"
         } else {
             "!"
         },
         binary_status,
-        if enabled { "włączona" } else { "wyłączona" }
+        configuration,
+        if executable(&agent_binary(&home)) { "gotowy" } else { "brak" },
+        if active { "aktywny" } else if enabled { "włączony, ale nieaktywny" } else { "wyłączony" },
+        next,
+        if legacy_timer_exists() { "\n! Wykryto starszy harmonogram plasmoid-updater.timer" } else { "" }
     )
 }
 
@@ -163,13 +312,192 @@ pub fn execute(job: Job, settings: Settings, log: &mut dyn FnMut(&str)) -> Resul
     match job {
         Job::Install => {
             install_missing_requirements(&home, log)?;
-            install_updater(&home, true, log)
+            install_updater(&home, false, log)
+        }
+        Job::Diagnose => diagnose(&home, log),
+        Job::Test => test_configuration(&home, &settings, log),
+        Job::RunService => {
+            log("Uruchamianie cyklu aktualizacji przez systemd --user…");
+            output(Command::new("systemctl").args(["--user", "start", SERVICE]))?;
+            log("Usługa zakończyła się sukcesem. Wynik jest dostępny w journalctl --user.");
+            Ok(())
         }
         Job::Check => run_updater(&home, &["check"], true, log),
         Job::DryRun => run_updater(&home, &["update", "--dry-run"], false, log),
         Job::Update => run_update_cycle(&home, &settings, log),
-        Job::Save => save_configuration(&home, &settings, log),
+        Job::Save { migrate_legacy } => save_configuration(&home, &settings, migrate_legacy, log),
     }
+}
+
+fn diagnose(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
+    let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let bazzite = os_release.to_lowercase().contains("bazzite");
+    let kde = env::var("XDG_CURRENT_DESKTOP")
+        .or_else(|_| env::var("XDG_SESSION_DESKTOP"))
+        .unwrap_or_default()
+        .to_uppercase()
+        .contains("KDE");
+    let mut missing = Vec::new();
+    for (name, detected) in [
+        ("Bazzite", bazzite),
+        ("KDE Plasma", kde),
+        ("x86_64", env::consts::ARCH == "x86_64"),
+        ("curl", on_path("curl").is_some()),
+        (
+            "kpackagetool6",
+            executable(Path::new("/usr/bin/kpackagetool6")) || on_path("kpackagetool6").is_some(),
+        ),
+        (
+            "systemctl --user",
+            Command::new("systemctl")
+                .args(["--user", "show-environment"])
+                .output()
+                .is_ok_and(|output| output.status.success()),
+        ),
+    ] {
+        log(&format!("{} {name}", if detected { "✓" } else { "✗" }));
+        if !detected {
+            missing.push(name);
+        }
+    }
+    log(&format!(
+        "{} Homebrew — opcjonalny, potrzebny tylko do instalacji brakującego bsdtar",
+        if on_path("brew").is_some() || executable(Path::new("/home/linuxbrew/.linuxbrew/bin/brew"))
+        {
+            "✓"
+        } else {
+            "!"
+        }
+    ));
+    log(&format!(
+        "{} bsdtar — {}",
+        if bsdtar_exists(home) { "✓" } else { "!" },
+        if bsdtar_exists(home) {
+            "dostępny"
+        } else {
+            "instalator spróbuje użyć Homebrew"
+        }
+    ));
+    if let Some((path, version)) = find_existing_updater(home) {
+        log(&format!("✓ plasmoid-updater {version}: {}", path.display()));
+    } else {
+        log("! plasmoid-updater: brak; można go zainstalować przyciskiem Instaluj.");
+    }
+    let config = upstream_config_path(home);
+    if config.is_file() {
+        let _: DocumentMut = fs::read_to_string(&config)?
+            .parse()
+            .with_context(|| format!("Błędny plik {}", config.display()))?;
+        log(&format!("✓ Istniejąca konfiguracja: {}", config.display()));
+    } else {
+        log("! Konfiguracja plasmoid-updater nie istnieje (można ją utworzyć z GUI).");
+    }
+    if legacy_timer_exists() {
+        log("! Starszy timer plasmoid-updater.timer: wymaga świadomej migracji.");
+    }
+    if !missing.is_empty() {
+        bail!(
+            "Brakuje wymaganych elementów środowiska: {}",
+            missing.join(", ")
+        );
+    }
+    log("Kontrola podstawowych elementów środowiska zakończona.");
+    Ok(())
+}
+
+fn test_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str)) -> Result<()> {
+    settings.validate()?;
+    let (path, version) = find_existing_updater(home)
+        .context("Nie znaleziono sprawnego plasmoid-updater — użyj przycisku Instaluj")?;
+    log(&format!(
+        "✓ Wykryto plasmoid-updater {version} w {}",
+        path.display()
+    ));
+    anyhow::ensure!(
+        service_bsdtar_exists(home),
+        "Brakuje bsdtar dostępnego dla systemd — uruchom Instaluj / uaktualnij"
+    );
+    anyhow::ensure!(
+        executable(Path::new("/usr/bin/kpackagetool6")) || on_path("kpackagetool6").is_some(),
+        "Brakuje kpackagetool6"
+    );
+    let config = upstream_config_path(home);
+    if config.is_file() {
+        let _: DocumentMut = fs::read_to_string(&config)?
+            .parse()
+            .with_context(|| format!("Błędna konfiguracja: {}", config.display()))?;
+        log("✓ Plik konfiguracyjny TOML ma poprawną składnię.");
+    } else {
+        bail!("Brak konfiguracji plasmoid-updater: {}", config.display());
+    }
+    log("Test bez zmian w dodatkach: plasmoid-updater update --dry-run…");
+    run_updater(home, &["update", "--dry-run"], false, log)?;
+    log("✓ Tryb dry-run zadziałał poprawnie.");
+
+    if settings.automatic {
+        anyhow::ensure!(
+            executable(&agent_binary(home)),
+            "Brakuje agenta w ~/.local/bin"
+        );
+        let agent_test = Command::new(agent_binary(home))
+            .arg("--version")
+            .output()
+            .context("Nie można uruchomić agenta")?;
+        anyhow::ensure!(
+            agent_test.status.success(),
+            "Agent nie uruchamia się poprawnie"
+        );
+        let service_path = home.join(".config/systemd/user").join(SERVICE);
+        let timer_path = home.join(".config/systemd/user").join(TIMER);
+        for file in [&service_path, &timer_path] {
+            anyhow::ensure!(
+                fs::read_to_string(file).is_ok_and(|value| value.contains(MANAGED)),
+                "Brakuje zarządzanej jednostki systemd: {}",
+                file.display()
+            );
+        }
+        let service_text = fs::read_to_string(&service_path)?;
+        anyhow::ensure!(
+            service_text.contains(&format!("ExecStart=%h/.local/bin/{AGENT} run")),
+            "Usługa nie uruchamia właściwego agenta"
+        );
+        let timer_text = fs::read_to_string(&timer_path)?;
+        anyhow::ensure!(
+            timer_text.contains(&format!(
+                "OnCalendar={}",
+                timer_schedule(settings.frequency_hours)?
+            )),
+            "Harmonogram systemd nie odpowiada ustawieniom GUI — zapisz konfigurację ponownie"
+        );
+        anyhow::ensure!(
+            user_unit_state(TIMER, "is-enabled"),
+            "Timer nie jest włączony"
+        );
+        anyhow::ensure!(
+            user_unit_state(TIMER, "is-active"),
+            "Timer nie jest aktywny"
+        );
+        anyhow::ensure!(
+            unit_property(SERVICE, "LoadState").as_deref() == Some("loaded"),
+            "Usługa systemd nie została poprawnie załadowana"
+        );
+        anyhow::ensure!(
+            unit_property(TIMER, "LoadState").as_deref() == Some("loaded"),
+            "Timer systemd nie został poprawnie załadowany"
+        );
+        anyhow::ensure!(
+            !legacy_timer_exists(),
+            "Starszy timer nadal jest aktywny lub włączony"
+        );
+        log("✓ Agent, usługa i harmonogram systemd są gotowe.");
+        if let Some(next) = unit_property(TIMER, "NextElapseUSecRealtime") {
+            log(&format!("Następne uruchomienie: {next}"));
+        }
+    } else {
+        log("Harmonogram jest wyłączony zgodnie z konfiguracją GUI.");
+    }
+    log("✓ Test konfiguracji zakończony pomyślnie. Nie zainstalowano żadnych dodatków.");
+    Ok(())
 }
 
 fn download(url: &str, destination: &Path) -> Result<()> {
@@ -256,20 +584,7 @@ fn verify_checksum(binary: &Path, expected: &str) -> Result<()> {
 }
 
 fn installed_version(home: &Path) -> Option<String> {
-    let result = Command::new(updater_binary(home))
-        .arg("--version")
-        .stdin(Stdio::null())
-        .output()
-        .ok()?;
-    if !result.status.success() {
-        return None;
-    }
-    let version = String::from_utf8_lossy(&result.stdout);
-    let mut columns = version.split_whitespace();
-    if columns.next()? != "plasmoid-updater" {
-        return None;
-    }
-    columns.next().map(str::to_owned)
+    find_existing_updater(home).map(|(_, version)| version)
 }
 
 fn already_current(version: Option<&str>, release_tag: &str) -> bool {
@@ -304,10 +619,9 @@ fn install_updater(home: &Path, force: bool, log: &mut dyn FnMut(&str)) -> Resul
     let release: GitHubRelease = serde_json::from_slice(&fs::read(metadata)?)
         .context("GitHub zwrócił nieprawidłowe metadane wydania")?;
     if !force && already_current(installed_version(home).as_deref(), &release.tag_name) {
-        log(&format!(
-            "plasmoid-updater {} jest aktualny — pominięto pobieranie.",
-            release.tag_name
-        ));
+        if let Some((path, version)) = find_existing_updater(home) {
+            log(&format!("plasmoid-updater {version} ({}) jest już aktualny — zachowano istniejącą instalację.", path.display()));
+        }
         return Ok(());
     }
     let (url, digest) = verified_asset(&release)?;
@@ -327,6 +641,10 @@ fn install_updater(home: &Path, force: bool, log: &mut dyn FnMut(&str)) -> Resul
     staged
         .as_file()
         .set_permissions(fs::Permissions::from_mode(0o755))?;
+    anyhow::ensure!(
+        version_of(staged.path()).is_some(),
+        "Pobrana binarka nie odpowiada na --version — nie zastąpiono poprzedniej"
+    );
     staged
         .persist(&target)
         .context("Nie można zastąpić programu")?;
@@ -365,8 +683,9 @@ fn run_update_cycle(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str))
 }
 
 fn run_updater(home: &Path, args: &[&str], check: bool, log: &mut dyn FnMut(&str)) -> Result<()> {
-    let binary = updater_binary(home);
-    anyhow::ensure!(binary.is_file(), "Najpierw zainstaluj plasmoid-updater");
+    let binary = find_existing_updater(home)
+        .map(|(path, _)| path)
+        .context("Najpierw zainstaluj plasmoid-updater")?;
     if args.first() == Some(&"update") && !bsdtar_exists(home) {
         bail!("Brakuje bsdtar. Zainstaluj: brew install libarchive");
     }
@@ -449,44 +768,49 @@ fn timer_schedule(hours: u8) -> Result<&'static str> {
     }
 }
 
-fn save_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str)) -> Result<()> {
-    settings.validate()?;
-    if settings.automatic {
-        anyhow::ensure!(
-            updater_binary(home).is_file(),
-            "Najpierw zainstaluj plasmoid-updater"
-        );
-        anyhow::ensure!(
-            bsdtar_exists(home),
-            "Brakuje bsdtar. Użyj najpierw przycisku Instaluj, aby program mógł dodać libarchive przez Homebrew."
-        );
-        let legacy = Command::new("systemctl")
-            .args(["--user", "is-active", "--quiet", "plasmoid-updater.timer"])
-            .status()
-            .is_ok_and(|status| status.success());
-        anyhow::ensure!(
-            !legacy,
-            "Wykryto aktywny starszy plasmoid-updater.timer. Wyłącz go przed uruchomieniem nowego harmonogramu, aby nie wykonywać aktualizacji dwa razy."
-        );
-    }
-    let config_path = home.join(".config/plasmoid-updater.toml");
-    let old = if config_path.exists() {
+fn upstream_document(home: &Path, settings: &Settings) -> Result<DocumentMut> {
+    let config_path = upstream_config_path(home);
+    let old = if config_path.is_file() {
         fs::read_to_string(&config_path)?
     } else {
         String::new()
     };
     let mut doc: DocumentMut = old
         .parse()
-        .context("Błędny istniejący plik plasmoid-updater.toml")?;
+        .with_context(|| format!("Błędny istniejący plik {}", config_path.display()))?;
     let mut excludes = Array::new();
     for package in &settings.excluded_packages {
         excludes.push(package.as_str());
     }
+    // Preserve manual upstream settings such as assume_yes, excluded_patterns,
+    // update_all_by_default and prompt_restart. The timer controls --yes itself.
     doc["excluded_packages"] = value(excludes);
-    // Manual invocations still ask for confirmation; only systemd has --yes.
-    doc["assume_yes"] = value(false);
-    doc["update_all_by_default"] = value(false);
-    doc["prompt_restart"] = value(true);
+    Ok(doc)
+}
+
+fn save_configuration(
+    home: &Path,
+    settings: &Settings,
+    migrate_legacy: bool,
+    log: &mut dyn FnMut(&str),
+) -> Result<()> {
+    settings.validate()?;
+    if settings.automatic {
+        anyhow::ensure!(
+            find_existing_updater(home).is_some(),
+            "Najpierw zainstaluj plasmoid-updater"
+        );
+        anyhow::ensure!(
+            service_bsdtar_exists(home),
+            "Brakuje bsdtar. Użyj najpierw przycisku Instaluj, aby program mógł dodać libarchive przez Homebrew."
+        );
+        anyhow::ensure!(
+            !legacy_timer_exists() || migrate_legacy,
+            "Wykryto starszy plasmoid-updater.timer. Zaznacz opcję migracji w GUI, aby bezpiecznie wyłączyć stary harmonogram."
+        );
+    }
+    let config_path = upstream_config_path(home);
+    let doc = upstream_document(home, settings)?;
 
     let units = home.join(".config/systemd/user");
     let service_path = units.join(SERVICE);
@@ -518,7 +842,30 @@ fn save_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str
     // may start immediately during 'enable --now'.
     settings.save(home)?;
     if settings.automatic {
-        output(Command::new("systemctl").args(["--user", "enable", "--now", TIMER]))?;
+        let migrated = migrate_legacy && legacy_timer_exists();
+        if migrated {
+            log("Migracja: wyłączanie starszego timera bez usuwania jego plików…");
+            output(Command::new("systemctl").args([
+                "--user",
+                "disable",
+                "--now",
+                "plasmoid-updater.timer",
+            ]))?;
+        }
+        if let Err(error) =
+            output(Command::new("systemctl").args(["--user", "enable", "--now", TIMER]))
+        {
+            if migrated {
+                log("Nowy timer nie został włączony — próba przywrócenia starszego harmonogramu…");
+                let _ = output(Command::new("systemctl").args([
+                    "--user",
+                    "enable",
+                    "--now",
+                    "plasmoid-updater.timer",
+                ]));
+            }
+            return Err(error);
+        }
         log("Automatyczne aktualizacje zostały włączone.");
     } else {
         output(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
@@ -585,5 +932,40 @@ mod tests {
         assert!(already_current(Some("0.3.0"), "v0.2.1"));
         assert!(!already_current(Some("0.2.0"), "v0.2.1"));
         assert!(!already_current(None, "v0.2.1"));
+    }
+
+    #[test]
+    fn detects_a_cargo_install_without_creating_a_second_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let location = temp.path().join(".cargo/bin/plasmoid-updater");
+        fs::create_dir_all(location.parent().unwrap()).unwrap();
+        fs::write(&location, "#!/bin/sh\necho 'plasmoid-updater 0.2.1'\n").unwrap();
+        fs::set_permissions(&location, fs::Permissions::from_mode(0o755)).unwrap();
+
+        let (binary, version) = find_existing_updater(temp.path()).unwrap();
+        assert_eq!(binary, location);
+        assert_eq!(version, "0.2.1");
+        assert!(!updater_binary(temp.path()).exists());
+    }
+
+    #[test]
+    fn preserves_existing_user_configuration_and_imports_exclusions() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(".config/plasmoid-updater.toml");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            "# user comment\nexcluded_packages = ['weather']\nexcluded_patterns = ['^org\\\\.kde']\nassume_yes = true\nprompt_restart = false\n",
+        )
+        .unwrap();
+
+        let settings = initial_settings(temp.path()).unwrap();
+        assert_eq!(settings.excluded_packages, vec!["weather"]);
+        let doc = upstream_document(temp.path(), &settings).unwrap();
+        let value = doc.to_string();
+        assert!(value.contains("# user comment"));
+        assert!(value.contains("assume_yes = true"));
+        assert!(value.contains("prompt_restart = false"));
+        assert!(value.contains("excluded_patterns"));
     }
 }

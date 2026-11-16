@@ -27,12 +27,14 @@ jobs:
             libfuse2t64 xvfb xauth
       - name: Check formatting
         run: cargo fmt --all -- --check
+      - name: Validate Bazzite host-test script
+        run: bash -n scripts/verify-bazzite.sh
       - name: Run unit tests
         run: cargo test --locked
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/bazzite-plasmoid-updater-agent --version | grep -F 'bazzite-plasmoid-updater-agent 0.2.0'
+          ./target/release/bazzite-plasmoid-updater-agent --version | grep -F 'bazzite-plasmoid-updater-agent 0.3.0'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -61,13 +63,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.2.0 >/dev/null 2>&1; then
-              echo "v0.2.0 already published; use a new version tag for another release."
+            if gh release view v0.3.0 >/dev/null 2>&1; then
+              echo "v0.3.0 already published; use a new version tag for another release."
             else
-              gh release create v0.2.0 dist/*.AppImage \
+              gh release create v0.3.0 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.2.0" \
-                --notes "Automatyczne aktualizacje w tle przez samodzielnego agenta systemd --user: aktualizuje dodatki KDE Store oraz samą binarkę plasmoid-updater z GitHub (kontrola SHA-256). Harmonogram 6/12/24 h, przełącznik aktualizacji narzędzia oraz naprawa brakującego bsdtar przez Homebrew."
+                --title "Bazzite Plasmoid Updater GUI v0.3.0" \
+                --notes "Instalator i konfigurator Bazzite KDE: pełniejsza diagnostyka zależności, wykrywanie instalacji Cargo/PATH, import wykluczeń z istniejącego TOML bez nadpisywania pozostałych ustawień, kontrolowana migracja starszego timera, test końcowy i uruchamianie usługi systemd z GUI. Aktualizacje dodatków i samej binarki plasmoid-updater pozostają bezobsługowe."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

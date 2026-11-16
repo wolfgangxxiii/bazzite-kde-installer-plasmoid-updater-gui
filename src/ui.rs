@@ -109,7 +109,7 @@ pub fn build(app: &adw::Application) {
         .application(app)
         .title("Bazzite • Plasmoid Updater")
         .default_width(760)
-        .default_height(760)
+        .default_height(840)
         .build();
 
     let overlay = adw::ToastOverlay::new();
@@ -146,15 +146,20 @@ pub fn build(app: &adw::Application) {
 
     let environment = adw::PreferencesGroup::new();
     environment.set_title("Środowisko");
-    let status_row = adw::ActionRow::builder()
-        .title("Bazzite i wymagane narzędzia")
-        .subtitle("Wykrywanie systemu, KDE, bsdtar i instalacji")
-        .build();
+    let diagnose_button = button("Sprawdź składniki", false);
+    environment.add(&action_row(
+        "Diagnostyka środowiska",
+        "Bazzite, KDE, curl, Homebrew, bsdtar, kpackagetool6, systemd i instalacja",
+        &diagnose_button,
+    ));
     let status = gtk::Label::new(Some(&backend::status()));
-    status.set_xalign(1.0);
+    status.set_xalign(0.0);
+    status.set_wrap(true);
+    status.set_selectable(true);
+    status.set_margin_top(8);
+    status.set_margin_bottom(8);
     status.add_css_class("caption");
-    status_row.add_suffix(&status);
-    environment.add(&status_row);
+    environment.add(&status);
     content.append(&environment);
 
     let install_group = adw::PreferencesGroup::new();
@@ -162,7 +167,7 @@ pub fn build(app: &adw::Application) {
     let install_button = button("Zainstaluj / uaktualnij", true);
     install_group.add(&action_row(
         "Instaluj plasmoid-updater",
-        "Pobiera binarkę x86_64 i weryfikuje SHA-256 przed instalacją do ~/.local/bin",
+        "Wykrywa istniejącą wersję; pobiera tylko nowszą i weryfikuje SHA-256",
         &install_button,
     ));
     let check_button = button("Sprawdź", false);
@@ -187,7 +192,7 @@ pub fn build(app: &adw::Application) {
 
     let settings_group = adw::PreferencesGroup::new();
     settings_group.set_title("Automatyzacja");
-    let initial = match backend::home().and_then(|h| Settings::load(&h)) {
+    let initial = match backend::home().and_then(|h| backend::initial_settings(&h)) {
         Ok(settings) => settings,
         Err(error) => {
             status.set_text(&format!("{}\nUstawienia: {error:#}", backend::status()));
@@ -229,6 +234,15 @@ pub fn build(app: &adw::Application) {
         .build();
     settings_group.add(&restart);
 
+    let migrate_legacy = adw::SwitchRow::builder()
+        .title("Przejmij starszy harmonogram, jeśli istnieje")
+        .subtitle(
+            "Po zapisaniu wyłączy plasmoid-updater.timer; zachowa jego pliki i aktywuje nowy timer",
+        )
+        .active(false)
+        .build();
+    settings_group.add(&migrate_legacy);
+
     let exclusions = adw::EntryRow::builder()
         .title("Wykluczone dodatki (oddziel przecinkami)")
         .text(initial.excluded_packages.join(", "))
@@ -242,6 +256,19 @@ pub fn build(app: &adw::Application) {
     save_row.add_suffix(&save_button);
     save_row.set_activatable_widget(Some(&save_button));
     settings_group.add(&save_row);
+
+    let test_button = button("Przetestuj", false);
+    settings_group.add(&action_row(
+        "Test końcowy konfiguracji",
+        "Sprawdza TOML, narzędzia, agenta, systemd oraz dry-run bez zmian w dodatkach",
+        &test_button,
+    ));
+    let run_service_button = button("Uruchom teraz", false);
+    settings_group.add(&action_row(
+        "Przetestuj pełny cykl aktualizacji",
+        "Uruchamia usługę systemd i instaluje dostępne aktualizacje (wykonuje zmiany)",
+        &run_service_button,
+    ));
     content.append(&settings_group);
 
     let log_group = adw::PreferencesGroup::new();
@@ -257,7 +284,7 @@ pub fn build(app: &adw::Application) {
         .bottom_margin(10)
         .build();
     let output = log_view.buffer();
-    output.set_text("Gotowe. Rozpocznij od instalacji, a potem zapisz harmonogram.");
+    output.set_text("Gotowe. Sprawdź składniki, zainstaluj program i zapisz harmonogram. Na końcu wykonaj test.");
     let log_scroll = gtk::ScrolledWindow::builder()
         .min_content_height(160)
         .max_content_height(260)
@@ -286,15 +313,23 @@ pub fn build(app: &adw::Application) {
         output,
         toast: overlay,
         buttons: Rc::new(vec![
+            diagnose_button.clone(),
             install_button.clone(),
             check_button.clone(),
             dry_run_button.clone(),
             update_button.clone(),
             save_button.clone(),
+            test_button.clone(),
+            run_service_button.clone(),
         ]),
         busy: Rc::new(Cell::new(false)),
     };
     refresh.connect_clicked(move |_| status.set_text(&backend::status()));
+
+    let parts_diagnose = parts.clone();
+    diagnose_button.connect_clicked(move |_| {
+        launch(parts_diagnose.clone(), Job::Diagnose, Settings::default())
+    });
 
     let parts_install = parts.clone();
     install_button
@@ -320,8 +355,21 @@ pub fn build(app: &adw::Application) {
     let read_update = read_form.clone();
     update_button
         .connect_clicked(move |_| launch(parts_update.clone(), Job::Update, read_update()));
+    let read_test = read_form.clone();
+    let parts_test = parts.clone();
+    test_button.connect_clicked(move |_| launch(parts_test.clone(), Job::Test, read_test()));
+    let parts_service = parts.clone();
+    run_service_button.connect_clicked(move |_| {
+        launch(parts_service.clone(), Job::RunService, Settings::default())
+    });
     save_button.connect_clicked(move |_| {
-        launch(parts.clone(), Job::Save, read_form());
+        launch(
+            parts.clone(),
+            Job::Save {
+                migrate_legacy: migrate_legacy.is_active(),
+            },
+            read_form(),
+        );
     });
     window.present();
 }

@@ -80,6 +80,14 @@ capture_page() {
     scrot 'ui-smoke/desktop-automation-scrolled.png'
   fi
 
+  # A screenshot can succeed despite a card being drawn over its neighbour.
+  # Treat libadwaita's allocation warning as a layout test failure.
+  if grep -q 'exceeds AdwBreakpointBin height' "ui-smoke/${label}.log"; then
+    echo "A widget overlaps its allocated card in the ${label} layout" >&2
+    grep 'exceeds AdwBreakpointBin height' "ui-smoke/${label}.log" >&2
+    exit 1
+  fi
+
   kill -TERM -- "-$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""

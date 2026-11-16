@@ -33,6 +33,7 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Rozwijane sekcje **Testowanie i uruchamianie ręczne**, **Ustawienia zaawansowane**, **Pierwsze kroki** i **Szczegóły stanu i ścieżki** mają spójny wygląd, czytelną wektorową strzałkę i duży obszar klikania. Przyciski testowania znajdują się pod opisami i są dostępne w wąskim oknie.
 - Przyciski nagłówka mają wyrównane rozmiary, a odświeżanie ma wyśrodkowaną ikonę. Kafelki i osobne karty harmonogramu, powiadomień oraz instalacji zachowują odstępy.
 - Wersja 0.5.10 zawiera czytelniejszy nagłówek z identyfikatorem wersji, nagłówek nawigacji z ikoną oraz przycisk prowadzący do projektu źródłowego. Diagnostyka pokazuje każdy składnik osobno, z zielonym lub czerwonym wskaźnikiem.
+- Wersja 0.5.11 naprawia nakładanie się kafelków i obcinanie przycisków w wąskich oknach, dzięki stabilnemu układowi przycisków pod opisem w kartach działań.
 - Akcent przycisków, aktywnej nawigacji i przełączników odczytuje z aktywnej konfiguracji KDE Plasma (`kdeglobals`); w pozostałych środowiskach pozostaje natywny styl GTK.
 - AppImage odczytuje preferowany motyw kursora z ustawień GTK4 lub KDE Plasma, zachowując jawnie ustawione ścieżki `XCURSOR_PATH` i przeszukując motywy systemowe przed dołączonymi ikonami.
 - Na KDE Plasma program dodatkowo ustawia motyw i rozmiar kursora bezpośrednio w GTK, korzystając z `kcminputrc` (z fallbackiem do `gtk-4.0/settings.ini`). Pomaga to, gdy portal Wayland zgłasza GTK przestarzały motyw kursora.
@@ -153,7 +154,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.5.10` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.5.11` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

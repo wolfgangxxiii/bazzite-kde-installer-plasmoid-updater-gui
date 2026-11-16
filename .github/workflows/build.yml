@@ -37,7 +37,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.10'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.11'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -91,12 +91,12 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.10 >/dev/null 2>&1; then
-              echo "v0.5.10 already published; use a new version tag for another release."
+            if gh release view v0.5.11 >/dev/null 2>&1; then
+              echo "v0.5.11 already published; use a new version tag for another release."
             else
-              gh release create v0.5.10 dist/*.AppImage \
+              gh release create v0.5.11 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.10" \
+                --title "Bazzite Plasmoid Updater GUI v0.5.11" \
                 --notes "Nowe nagłówki, czytelna lista diagnostyki z kolorami statusu, przycisk projektu źródłowego i akcent przycisków odczytywany z aktualnego motywu KDE Plasma."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then

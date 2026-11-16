@@ -771,18 +771,19 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
     icon
 }
 
-// Restrict natural label widths: otherwise long translated descriptions push
-// buttons outside the card even before GTK evaluates its narrow breakpoint.
-fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::BreakpointBin {
-    let card = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+// Keep actions in their own row. The previous AdwBreakpointBin could allocate
+// the card's desktop height after switching to a vertical layout; on small
+// windows that clipped the button and overlapped the following card.
+fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> gtk::Box {
+    let card = gtk::Box::new(gtk::Orientation::Vertical, 6);
     card.add_css_class("card");
     card.set_margin_bottom(10);
 
     let body = gtk::Box::new(gtk::Orientation::Vertical, 3);
     body.set_hexpand(true);
     body.set_margin_top(12);
-    body.set_margin_bottom(12);
     body.set_margin_start(16);
+    body.set_margin_end(16);
     let heading = gtk::Label::new(Some(title));
     heading.add_css_class("heading");
     heading.set_wrap(true);
@@ -799,28 +800,12 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
     body.append(&detail);
     card.append(&body);
 
-    button.set_halign(gtk::Align::End);
-    button.set_valign(gtk::Align::Center);
-    button.set_margin_start(8);
-    button.set_margin_end(12);
-    button.set_margin_top(9);
-    button.set_margin_bottom(9);
+    button.set_halign(gtk::Align::Fill);
+    button.set_margin_start(16);
+    button.set_margin_end(16);
+    button.set_margin_bottom(12);
     card.append(button);
-
-    let adaptive = adw::BreakpointBin::new();
-    adaptive.set_size_request(1, 1);
-    adaptive.set_child(Some(&card));
-    let narrow = adw::Breakpoint::new(
-        adw::BreakpointCondition::parse("max-width: 650px").expect("Valid action width breakpoint"),
-    );
-    narrow.add_setter(
-        &card,
-        "orientation",
-        Some(&gtk::Orientation::Vertical.to_value()),
-    );
-    narrow.add_setter(button, "halign", Some(&gtk::Align::Fill.to_value()));
-    adaptive.add_breakpoint(narrow);
-    adaptive
+    card
 }
 
 fn status_tile(title: &str, kind: UiIcon) -> (gtk::Box, gtk::Label) {

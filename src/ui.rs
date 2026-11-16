@@ -1749,11 +1749,14 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let initial = match backend::home().and_then(|h| backend::initial_settings(&h)) {
         Ok(settings) => settings,
         Err(error) => {
-            render_status_checks(&status, &format!(
-                "{}\n{}: {error:#}",
-                backend::status_localized(english()),
-                t("Ustawienia", "Settings")
-            ));
+            render_status_checks(
+                &status,
+                &format!(
+                    "{}\n{}: {error:#}",
+                    backend::status_localized(english()),
+                    t("Ustawienia", "Settings")
+                ),
+            );
             Settings::default()
         }
     };

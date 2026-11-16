@@ -37,7 +37,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.6'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.7'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -91,13 +91,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.6 >/dev/null 2>&1; then
-              echo "v0.5.6 already published; use a new version tag for another release."
+            if gh release view v0.5.7 >/dev/null 2>&1; then
+              echo "v0.5.7 already published; use a new version tag for another release."
             else
-              gh release create v0.5.6 dist/*.AppImage \
+              gh release create v0.5.7 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.6" \
-                --notes "Poprawki wyświetlania: stale widoczny przycisk Zapisz i zastosuj w Automatyzacji, odczyt motywu kursora z ustawień GTK4/KDE i testy wszystkich pięciu ekranów."
+                --title "Bazzite Plasmoid Updater GUI v0.5.7" \
+                --notes "Poprawki testów ręcznych na małych ekranach i dokładniejsze dopasowanie motywu oraz rozmiaru kursora do ustawień KDE Plasma w GTK4 na Waylandzie."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

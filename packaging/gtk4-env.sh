@@ -10,8 +10,8 @@ fi
 
 # linuxdeploy changes the icon search environment. Cursors must still be
 # resolved from the host Plasma theme, including user-installed themes.
-# GTK's settings.ini is preferred; KDE's kcminputrc is a fallback for setups
-# where GTK settings have not yet been synchronized by Plasma.
+# Plasma's kcminputrc is authoritative on KDE; GTK's settings.ini is used
+# when KDE settings are unavailable (or on other desktop environments).
 read_cursor_theme() {
   awk -v section="$1" -v key="$2" '
     /^\[[^]]+\]/ {
@@ -38,7 +38,14 @@ if [ -z "${XCURSOR_THEME:-}" ]; then
   gtk_settings="$config_home/gtk-4.0/settings.ini"
   kde_settings="$config_home/kcminputrc"
   cursor_theme=""
-  if [ -r "$gtk_settings" ]; then
+  case ":${XDG_CURRENT_DESKTOP:-}:" in
+    *:KDE:*)
+      if [ -r "$kde_settings" ]; then
+        cursor_theme="$(read_cursor_theme Mouse cursorTheme "$kde_settings")"
+      fi
+      ;;
+  esac
+  if [ -z "$cursor_theme" ] && [ -r "$gtk_settings" ]; then
     cursor_theme="$(read_cursor_theme Settings gtk-cursor-theme-name "$gtk_settings")"
   fi
   if [ -z "$cursor_theme" ] && [ -r "$kde_settings" ]; then
@@ -51,5 +58,5 @@ fi
 
 if [ -z "${XCURSOR_PATH:-}" ]; then
   # Put host themes ahead of AppImage's bundled fallback Adwaita icons.
-  export XCURSOR_PATH="${HOME:-}/.icons:${HOME:-}/.local/share/icons:/usr/local/share/icons:/usr/share/icons:${APPDIR:-}/usr/share/icons:/usr/share/pixmaps"
+  export XCURSOR_PATH="${HOME:-}/.icons:${XDG_DATA_HOME:-${HOME:-}/.local/share}/icons:${HOME:-}/.local/share/icons:/usr/local/share/icons:/usr/share/icons:${APPDIR:-}/usr/share/icons:/usr/share/pixmaps"
 fi

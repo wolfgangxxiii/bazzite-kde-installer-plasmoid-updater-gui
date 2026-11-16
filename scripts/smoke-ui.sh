@@ -9,12 +9,17 @@ trap 'if [[ -n "$app_pid" ]]; then kill -TERM -- "-$app_pid" 2>/dev/null || true
 capture_page() {
   local page="$1" width="$2" height="$3" label="$4"
   local window_id=""
+  local expand_tests=0
+  if [[ "$label" == narrow-automation-tests ]]; then
+    expand_tests=1
+  fi
 
   # An explicit initial page is deterministic across font themes and scaling.
   # AppImage's AppRun spawns a wrapped GUI process. A dedicated process group
   # lets us terminate the entire tree; otherwise the next GTK instance exits
   # after forwarding activation to the still-running first window.
-  setsid env BAZZITE_GUI_SMOKE_PAGE="$page" APPIMAGE_EXTRACT_AND_RUN=1 \
+  setsid env BAZZITE_GUI_SMOKE_PAGE="$page" \
+    BAZZITE_GUI_SMOKE_EXPAND_TESTS="$expand_tests" APPIMAGE_EXTRACT_AND_RUN=1 \
     GDK_BACKEND=x11 G_DEBUG=fatal-criticals \
     "$APPIMAGE" >"ui-smoke/${label}.log" 2>&1 &
   app_pid=$!
@@ -46,6 +51,11 @@ capture_page() {
     sed -n '1,100p' "ui-smoke/${label}.log" >&2
     exit 1
   fi
+  if [[ "$expand_tests" == 1 ]]; then
+    # Scroll to the bottom of the expanded tests to exercise both actions.
+    xdotool mousemove --window "$window_id" 330 410 click --repeat 20 --delay 50 5
+    sleep 0.5
+  fi
   scrot "ui-smoke/${label}.png"
 
   if [[ "$page" == automation && "$label" == desktop-automation ]]; then
@@ -67,4 +77,5 @@ for page in dashboard installation addons automation journal; do
   capture_page "$page" 1020 740 "desktop-${page}"
 done
 capture_page automation 540 720 narrow-automation
+capture_page automation 540 720 narrow-automation-tests
 capture_page installation 540 720 narrow-installation

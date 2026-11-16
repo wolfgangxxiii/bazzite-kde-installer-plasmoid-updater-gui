@@ -22,9 +22,18 @@ actual="$(env -u XDG_CONFIG_HOME HOME="$fixture_root/home" XCURSOR_THEME=UserCho
 rm "$fixture_root/home/.config/gtk-4.0/settings.ini"
 printf '[Mouse]\ncursorTheme=Breeze\n' \
   >"$fixture_root/home/.config/kcminputrc"
-actual="$(env -u XDG_CONFIG_HOME -u XCURSOR_THEME HOME="$fixture_root/home" sh -c \
+actual="$(env -u XDG_CONFIG_HOME -u XCURSOR_THEME HOME="$fixture_root/home" \
+  XDG_CURRENT_DESKTOP=KDE sh -c \
   '. "$1"; printf "%s" "$XCURSOR_THEME"' \
   _ "$project_root/packaging/gtk4-env.sh")"
 [[ "$actual" == Breeze ]]
 
-echo 'Cursor theme checks passed (GTK, explicit override, KDE fallback).'
+printf '[Settings]\ngtk-cursor-theme-name=Adwaita\n' \
+  >"$fixture_root/home/.config/gtk-4.0/settings.ini"
+actual="$(env -u XDG_CONFIG_HOME -u XCURSOR_THEME HOME="$fixture_root/home" \
+  XDG_CURRENT_DESKTOP=KDE sh -c \
+  '. "$1"; printf "%s" "$XCURSOR_THEME"' \
+  _ "$project_root/packaging/gtk4-env.sh")"
+[[ "$actual" == Breeze ]]
+
+echo 'Cursor theme checks passed (GTK, override, KDE priority and fallback).'

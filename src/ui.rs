@@ -4,6 +4,8 @@ use crate::settings::Settings;
 use adw::prelude::*;
 use gtk::glib;
 use std::cell::{Cell, RefCell};
+use std::fs;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
@@ -782,6 +784,20 @@ fn info_card(title: &str, subtitle: &str) -> gtk::Box {
     card
 }
 
+// Expanding preferences must not depend on a nested breakpoint. On a narrow
+// screen each test stays in one column, with its action below the description.
+fn test_action_card(title: &str, subtitle: &str, action: &gtk::Button) -> gtk::Box {
+    let card = info_card(title, subtitle);
+    action.set_width_request(-1);
+    action.set_hexpand(true);
+    action.set_halign(gtk::Align::Fill);
+    action.set_margin_start(16);
+    action.set_margin_end(16);
+    action.set_margin_bottom(12);
+    card.append(action);
+    card
+}
+
 fn repair_card(title: &str, subtitle: &str, action: &gtk::Button) -> gtk::Box {
     let card = info_card(title, subtitle);
     card.add_css_class("warning");
@@ -872,7 +888,93 @@ pub fn build(app: &adw::Application) {
     build_with_page(app, initial_page, None);
 }
 
+fn ini_value<'a>(content: &'a str, section: &str, key: &str) -> Option<&'a str> {
+    let mut current_section = "";
+    for line in content.lines().map(str::trim) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
+            current_section = name.trim();
+        } else if current_section == section {
+            if let Some((name, value)) = line.split_once('=') {
+                if name.trim() == key {
+                    return Some(value.trim());
+                }
+            }
+        }
+    }
+    None
+}
+
+#[cfg(test)]
+mod cursor_tests {
+    use super::ini_value;
+
+    #[test]
+    fn reads_only_the_requested_section() {
+        let ini =
+            "[General]\ncursorTheme=Wrong\n[Mouse]\ncursorTheme = Breeze_Snow\ncursorSize=32\n";
+        assert_eq!(ini_value(ini, "Mouse", "cursorTheme"), Some("Breeze_Snow"));
+        assert_eq!(ini_value(ini, "Mouse", "cursorSize"), Some("32"));
+        assert_eq!(ini_value(ini, "Settings", "cursorTheme"), None);
+    }
+}
+
+fn apply_host_cursor_theme() {
+    let config_home = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")));
+    let Some(config_home) = config_home else {
+        return;
+    };
+
+    // Plasma's cursor selection is authoritative on KDE/Wayland; a portal
+    // can otherwise return a stale Adwaita default to GTK4 AppImages.
+    let on_kde = std::env::var("XDG_CURRENT_DESKTOP")
+        .ok()
+        .is_some_and(|desktop| {
+            desktop
+                .split(':')
+                .any(|name| name.eq_ignore_ascii_case("KDE"))
+        });
+    let kde_ini = if on_kde {
+        fs::read_to_string(config_home.join("kcminputrc")).ok()
+    } else {
+        None
+    };
+    let gtk_ini = fs::read_to_string(config_home.join("gtk-4.0/settings.ini")).ok();
+    let theme = kde_ini
+        .as_deref()
+        .and_then(|ini| ini_value(ini, "Mouse", "cursorTheme"))
+        .or_else(|| {
+            gtk_ini
+                .as_deref()
+                .and_then(|ini| ini_value(ini, "Settings", "gtk-cursor-theme-name"))
+        });
+    let size = kde_ini
+        .as_deref()
+        .and_then(|ini| ini_value(ini, "Mouse", "cursorSize"))
+        .or_else(|| {
+            gtk_ini
+                .as_deref()
+                .and_then(|ini| ini_value(ini, "Settings", "gtk-cursor-theme-size"))
+        })
+        .and_then(|size| size.parse::<i32>().ok())
+        .filter(|size| (1..=256).contains(size));
+
+    if let Some(settings) = gtk::Settings::default() {
+        if let Some(theme) = theme.filter(|name| !name.is_empty()) {
+            settings.set_gtk_cursor_theme_name(Some(theme));
+        }
+        if let Some(size) = size {
+            settings.set_gtk_cursor_theme_size(size);
+        }
+    }
+}
+
 fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Option<ViewState>) {
+    apply_host_cursor_theme();
     let initial_width = initial_state
         .as_ref()
         .map_or(1020, |state| state.width.max(420));
@@ -1466,8 +1568,12 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     });
 
     let test_button = button(t("Przetestuj", "Test"), false);
-    let tests = gtk::Box::new(gtk::Orientation::Vertical, 6);
-    tests.append(&action_row(
+    let tests_expander = adw::ExpanderRow::new();
+    tests_expander.set_title(t(
+        "Testowanie i uruchamianie ręczne",
+        "Testing and manual execution",
+    ));
+    tests_expander.add_row(&test_action_card(
         t("Test końcowy konfiguracji", "Configuration check"),
         t(
             "Sprawdza TOML, narzędzia, agenta, systemd oraz dry-run bez zmian w dodatkach",
@@ -1476,7 +1582,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         &test_button,
     ));
     let run_service_button = button(t("Uruchom teraz", "Run now"), false);
-    tests.append(&action_row(
+    tests_expander.add_row(&test_action_card(
         t(
             "Przetestuj pełny cykl aktualizacji",
             "Run a full update cycle",
@@ -1487,12 +1593,9 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         ),
         &run_service_button,
     ));
-    let tests_expander = gtk::Expander::new(Some(t(
-        "Testowanie i uruchamianie ręczne",
-        "Testing and manual execution",
-    )));
-    tests_expander.set_margin_top(6);
-    tests_expander.set_child(Some(&tests));
+    if std::env::var("BAZZITE_GUI_SMOKE_EXPAND_TESTS").as_deref() == Ok("1") {
+        tests_expander.set_expanded(true);
+    }
     apply_group.add(&tests_expander);
     let advanced_expander =
         gtk::Expander::new(Some(t("Ustawienia zaawansowane", "Advanced settings")));

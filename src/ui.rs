@@ -267,21 +267,37 @@ fn render_inventory(parts: &UiParts) {
     for addon in visible {
         let update = updates
             .iter()
-            .find(|item| item.installed.path == addon.path);
+            .find(|item| {
+                if !item.installed.path.is_empty() && !addon.path.is_empty() {
+                    item.installed.path == addon.path
+                } else {
+                    item.installed.name == addon.name
+                        && item.installed.component_type == addon.component_type
+                        && item.installed.is_system == addon.is_system
+                }
+            });
         let description = match update {
             Some(item) => format!(
-                "{} · {} · {}: {}\n{}",
+                "{} · {} · {}: {}{}",
                 addon_scope(addon),
                 addon.component_type,
                 t("Dostępna wersja", "Available version"),
                 item.latest_version,
-                addon.path
+                if addon.path.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{}", addon.path)
+                }
             ),
             None => format!(
-                "{} · {}\n{}",
+                "{} · {}{}",
                 addon_scope(addon),
                 addon.component_type,
-                addon.path
+                if addon.path.is_empty() {
+                    String::new()
+                } else {
+                    format!("\n{}", addon.path)
+                }
             ),
         };
         let row = adw::ActionRow::builder()

@@ -1,4 +1,5 @@
 use crate::backend::{self, AvailableAddonUpdate, InstalledAddon, Job, UpdateOverview};
+use crate::i18n::{t, Language};
 use crate::settings::Settings;
 use adw::prelude::*;
 use gtk::glib;
@@ -41,6 +42,7 @@ struct UiParts {
     output: gtk::TextBuffer,
     toast: adw::ToastOverlay,
     activity: gtk::Label,
+    status_bar: gtk::Box,
     spinner: gtk::Spinner,
     cancel_button: gtk::Button,
     cancel_token: Rc<RefCell<Option<Arc<AtomicBool>>>>,
@@ -58,6 +60,55 @@ struct UiParts {
     updates_count: gtk::Label,
     inventory_search: gtk::SearchEntry,
     inventory_scope: gtk::DropDown,
+    environment_value: gtk::Label,
+    updater_value: gtk::Label,
+    agent_value: gtk::Label,
+    timer_value: gtk::Label,
+    repair_button: gtk::Button,
+    repair_notice: adw::BreakpointBin,
+}
+
+fn english() -> bool {
+    Language::selected() == Language::English
+}
+
+fn refresh_status(parts: &UiParts) {
+    let summary = backend::dashboard_summary();
+    parts
+        .environment_value
+        .set_text(if summary.environment_ready {
+            t("Gotowe", "Ready")
+        } else {
+            t("Wymaga uwagi", "Needs attention")
+        });
+    parts.updater_value.set_text(
+        &summary
+            .updater_version
+            .map(|version| format!("v{version}"))
+            .unwrap_or_else(|| t("Nie zainstalowano", "Not installed").into()),
+    );
+    parts.agent_value.set_text(&match summary.agent_version {
+        Some(version) if version == env!("CARGO_PKG_VERSION") => {
+            format!("v{version} · {}", t("Aktualny", "Up to date"))
+        }
+        Some(version) => format!("v{version} · {}", t("Wymaga naprawy", "Repair needed")),
+        None => t("Brak agenta", "Agent missing").into(),
+    });
+    parts.timer_value.set_text(if summary.timer_active {
+        t("Aktywny", "Active")
+    } else {
+        t("Nieaktywny", "Inactive")
+    });
+    parts
+        .repair_notice
+        .set_visible(backend::agent_needs_repair());
+    parts
+        .repair_button
+        .set_sensitive(backend::agent_needs_repair());
+    parts.status.set_text(&backend::status_localized(english()));
+    parts
+        .automation
+        .set_text(&backend::automation_report_localized(english()));
 }
 
 fn append_log(buffer: &gtk::TextBuffer, message: &str) {
@@ -88,15 +139,15 @@ fn empty_list_message(list: &gtk::ListBox, message: &str) {
 
 fn addon_scope(addon: &InstalledAddon) -> &'static str {
     if addon.is_system {
-        "Systemowy (tylko odczyt)"
+        t("Systemowy (tylko odczyt)", "System (read-only)")
     } else {
-        "Użytkownika"
+        t("Użytkownika", "User")
     }
 }
 
 fn addon_version(version: &str) -> &str {
     if version.is_empty() || version == "0.0.0" {
-        "nieznana"
+        t("nieznana", "unknown")
     } else {
         version
     }
@@ -125,12 +176,19 @@ fn render_inventory(parts: &UiParts) {
     let user_count = inventory.iter().filter(|addon| !addon.is_system).count();
     let system_count = inventory.len() - user_count;
     parts.inventory_count.set_text(&format!(
-        "Znaleziono: {} użytkownika · {} systemowych · {} widocznych{}",
+        "{}: {} {} · {} {} · {} {}{}",
+        t("Znaleziono", "Found"),
         user_count,
+        t("użytkownika", "user"),
         system_count,
+        t("systemowych", "system"),
         visible.len(),
+        t("widocznych", "visible"),
         if parts.partial_system.get() {
-            " · UWAGA: skan systemowych nie powiódł się"
+            t(
+                " · UWAGA: skan systemowych nie powiódł się",
+                " · WARNING: system scan failed",
+            )
         } else {
             ""
         }
@@ -139,9 +197,15 @@ fn render_inventory(parts: &UiParts) {
         empty_list_message(
             &parts.inventory_list,
             if inventory.is_empty() {
-                "Nie znaleziono dodatków. Uruchom skanowanie, aby sprawdzić instalację KDE."
+                t(
+                    "Nie znaleziono dodatków. Uruchom skanowanie, aby sprawdzić instalację KDE.",
+                    "No addons found. Run a scan to check your KDE installation.",
+                )
             } else {
-                "Brak dodatków pasujących do wyszukiwania i wybranego filtru."
+                t(
+                    "Brak dodatków pasujących do wyszukiwania i wybranego filtru.",
+                    "No addons match the search and selected filter.",
+                )
             },
         );
     }
@@ -151,9 +215,10 @@ fn render_inventory(parts: &UiParts) {
             .find(|item| item.installed.path == addon.path);
         let description = match update {
             Some(item) => format!(
-                "{} · {} · Dostępna wersja: {}\n{}",
+                "{} · {} · {}: {}\n{}",
                 addon_scope(addon),
                 addon.component_type,
+                t("Dostępna wersja", "Available version"),
                 item.latest_version,
                 addon.path
             ),
@@ -183,18 +248,25 @@ fn render_inventory(parts: &UiParts) {
 fn render_updates(parts: &UiParts, overview: UpdateOverview) {
     clear_list(&parts.updates_list);
     parts.updates_count.set_text(&format!(
-        "{} aktualizacji · {} problemów · {} pominiętych · {} bez dopasowania",
+        "{} {} · {} {} · {} {} · {} {}",
         overview.available.len(),
+        t("aktualizacji", "updates"),
         overview.issues.len(),
+        t("problemów", "issues"),
         overview.skipped,
+        t("pominiętych", "skipped"),
         overview.unmatched,
+        t("bez dopasowania", "unmatched"),
     ));
     let mut updates = overview.available;
     updates.sort_by_key(|item| item.installed.name.to_lowercase());
     if updates.is_empty() && overview.issues.is_empty() {
         empty_list_message(
             &parts.updates_list,
-            "Nie wykryto dostępnych aktualizacji dodatków.",
+            t(
+                "Nie wykryto dostępnych aktualizacji dodatków.",
+                "No addon updates were found.",
+            ),
         );
     }
     for update in &updates {
@@ -235,9 +307,13 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
     for input in parts.settings_inputs.iter() {
         input.set_sensitive(false);
     }
-    parts.activity.set_text("Trwa operacja…");
+    parts
+        .activity
+        .set_text(t("Trwa operacja…", "Operation in progress…"));
+    parts.status_bar.set_visible(true);
     parts.spinner.start();
     parts.cancel_button.set_sensitive(task.cancellable());
+    parts.cancel_button.set_visible(task.cancellable());
     let cancel = Arc::new(AtomicBool::new(false));
     *parts.cancel_token.borrow_mut() = Some(cancel.clone());
     append_log(&parts.output, &format!("▶ {task:?}"));
@@ -253,8 +329,10 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                     Task::Inventory => {
                         let mut addons = backend::installed_addons(false)?;
                         let _ = sender.send(Message::Progress(format!(
-                            "Znaleziono {} dodatków użytkownika.",
-                            addons.len()
+                            "{} {} {}.",
+                            t("Znaleziono", "Found"),
+                            addons.len(),
+                            t("dodatków użytkownika", "user addons")
                         )));
                         let system = backend::installed_addons(true);
                         let incomplete = system.is_err();
@@ -263,7 +341,7 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                         }
                         let _ = sender.send(Message::Inventory(addons, incomplete));
                         if let Err(error) = system {
-                            anyhow::bail!("Lista dodatków użytkownika jest dostępna, ale odczyt dodatków systemowych się nie powiódł: {error:#}");
+                            anyhow::bail!("{}: {error:#}", t("Lista dodatków użytkownika jest dostępna, ale odczyt dodatków systemowych się nie powiódł", "User addons are available, but the system addon scan failed"));
                         }
                         Ok(())
                     }
@@ -284,10 +362,14 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
             match receiver.try_recv() {
                 Ok(Message::Progress(line)) => {
                     append_log(&parts.output, &line);
-                    let preview = line.lines().last().unwrap_or(&line);
-                    parts
-                        .activity
-                        .set_text(&preview.chars().take(100).collect::<String>());
+                    if english() {
+                        parts.activity.set_text("Working… details in the log");
+                    } else {
+                        let preview = line.lines().last().unwrap_or(&line);
+                        parts
+                            .activity
+                            .set_text(&preview.chars().take(100).collect::<String>());
+                    }
                 }
                 Ok(Message::Inventory(addons, incomplete)) => {
                     parts.partial_system.set(incomplete);
@@ -299,30 +381,40 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                     let succeeded = result.is_ok();
                     match result {
                         Ok(()) => {
-                            append_log(&parts.output, "✓ Operacja zakończona pomyślnie.");
-                            parts.toast.add_toast(adw::Toast::new("Gotowe"));
+                            append_log(
+                                &parts.output,
+                                t(
+                                    "✓ Operacja zakończona pomyślnie.",
+                                    "✓ Operation completed successfully.",
+                                ),
+                            );
+                            parts.toast.add_toast(adw::Toast::new(t("Gotowe", "Done")));
                         }
                         Err(error) => {
                             append_log(&parts.output, &format!("✗ {error}"));
                             parts.toast.add_toast(adw::Toast::new(
                                 if error.contains("Anulowano operację") {
-                                    "Anulowano operację"
+                                    t("Anulowano operację", "Operation cancelled")
                                 } else {
-                                    "Operacja nie powiodła się — sprawdź dziennik"
+                                    t(
+                                        "Operacja nie powiodła się — sprawdź dziennik",
+                                        "Operation failed — check the log",
+                                    )
                                 },
                             ));
                         }
                     }
                     parts.spinner.stop();
+                    parts.status_bar.set_visible(false);
                     parts.activity.set_text(if succeeded {
-                        "Gotowe"
+                        t("Gotowe", "Done")
                     } else {
-                        "Sprawdź dziennik"
+                        t("Sprawdź dziennik", "Check the log")
                     });
                     parts.cancel_button.set_sensitive(false);
+                    parts.cancel_button.set_visible(false);
                     *parts.cancel_token.borrow_mut() = None;
-                    parts.status.set_text(&backend::status());
-                    parts.automation.set_text(&backend::automation_report());
+                    refresh_status(&parts);
                     for button in parts.buttons.iter() {
                         button.set_sensitive(true);
                     }
@@ -337,19 +429,30 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                     if matches!(task, Task::Operation(Job::Update | Job::RunService)) {
                         parts.updates.borrow_mut().clear();
                         clear_list(&parts.updates_list);
-                        parts
-                            .updates_count
-                            .set_text("Po aktualizacji sprawdź dostępne wersje ponownie.");
+                        parts.updates_count.set_text(t(
+                            "Po aktualizacji sprawdź dostępne wersje ponownie.",
+                            "Check available versions again after the update.",
+                        ));
                         launch(parts.clone(), Task::Inventory, Settings::default());
                     }
                     return glib::ControlFlow::Break;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
-                    append_log(&parts.output, "Przerwano zadanie bez wyniku.");
+                    append_log(
+                        &parts.output,
+                        t(
+                            "Przerwano zadanie bez wyniku.",
+                            "Task stopped without a result.",
+                        ),
+                    );
                     parts.spinner.stop();
-                    parts.activity.set_text("Przerwano zadanie");
+                    parts.status_bar.set_visible(false);
+                    parts
+                        .activity
+                        .set_text(t("Przerwano zadanie", "Task stopped"));
                     parts.cancel_button.set_sensitive(false);
+                    parts.cancel_button.set_visible(false);
                     *parts.cancel_token.borrow_mut() = None;
                     for button in parts.buttons.iter() {
                         button.set_sensitive(true);
@@ -366,16 +469,79 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
     });
 }
 
-// Keep actions on their own line: suffix buttons on AdwActionRow caused
-// overly-wide minimum sizes and overlapping controls in narrow windows.
-fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> gtk::Box {
-    let card = info_card(title, subtitle);
+// On desktop the action stays beside the text; a breakpoint moves it below
+// the description only when the available card width is genuinely narrow.
+fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::BreakpointBin {
+    let card = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    card.add_css_class("card");
+    card.set_margin_bottom(4);
+
+    let body = gtk::Box::new(gtk::Orientation::Vertical, 3);
+    body.set_hexpand(true);
+    body.set_margin_top(12);
+    body.set_margin_bottom(12);
+    body.set_margin_start(16);
+    let heading = gtk::Label::new(Some(title));
+    heading.add_css_class("heading");
+    heading.set_wrap(true);
+    heading.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    heading.set_xalign(0.0);
+    let detail = gtk::Label::new(Some(subtitle));
+    detail.add_css_class("dim-label");
+    detail.set_wrap(true);
+    detail.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    detail.set_xalign(0.0);
+    body.append(&heading);
+    body.append(&detail);
+    card.append(&body);
+
     button.set_halign(gtk::Align::End);
-    button.set_margin_start(16);
+    button.set_valign(gtk::Align::Center);
     button.set_margin_end(16);
-    button.set_margin_bottom(14);
+    button.set_margin_bottom(10);
     card.append(button);
-    card
+
+    let adaptive = adw::BreakpointBin::new();
+    adaptive.set_child(Some(&card));
+    let narrow = adw::Breakpoint::new(
+        adw::BreakpointCondition::parse("max-width: 520px").expect("Valid action width breakpoint"),
+    );
+    narrow.add_setter(
+        &card,
+        "orientation",
+        Some(&gtk::Orientation::Vertical.to_value()),
+    );
+    adaptive.add_breakpoint(narrow);
+    adaptive
+}
+
+fn status_tile(title: &str, icon_name: &str) -> (gtk::Box, gtk::Label) {
+    let tile = gtk::Box::new(gtk::Orientation::Vertical, 7);
+    tile.add_css_class("card");
+    tile.set_margin_bottom(4);
+    let heading_line = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    heading_line.set_margin_top(14);
+    heading_line.set_margin_start(14);
+    heading_line.set_margin_end(14);
+    let icon = gtk::Image::from_icon_name(icon_name);
+    icon.add_css_class("dim-label");
+    let heading = gtk::Label::new(Some(title));
+    heading.add_css_class("caption");
+    heading.set_wrap(true);
+    heading.set_xalign(0.0);
+    heading_line.append(&icon);
+    heading_line.append(&heading);
+    tile.append(&heading_line);
+    let value = gtk::Label::new(None);
+    value.add_css_class("heading");
+    value.set_wrap(true);
+    value.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    value.set_xalign(0.0);
+    value.set_margin_start(14);
+    value.set_margin_end(14);
+    value.set_margin_bottom(14);
+    tile.append(&value);
+    (tile, value)
 }
 
 fn info_card(title: &str, subtitle: &str) -> gtk::Box {
@@ -465,9 +631,16 @@ fn add_page(stack: &gtk::Stack, key: &str, title: &str, content: &gtk::Box) {
 }
 
 pub fn build(app: &adw::Application) {
+    build_with_page(app, "dashboard");
+}
+
+fn build_with_page(app: &adw::Application, initial_page: &str) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Instalator plasmoid-updater • Bazzite")
+        .title(t(
+            "Instalator plasmoid-updater • Bazzite",
+            "Plasmoid Updater Installer • Bazzite",
+        ))
         .default_width(1020)
         .default_height(740)
         .build();
@@ -477,25 +650,40 @@ pub fn build(app: &adw::Application) {
     let header = adw::HeaderBar::new();
     toolbar.add_top_bar(&header);
 
-    let header_title = adw::WindowTitle::new("Plasmoid Updater", "Instalator dla Bazzite KDE");
+    let header_title = adw::WindowTitle::new(
+        "Plasmoid Updater",
+        t("Instalator dla Bazzite KDE", "Installer for Bazzite KDE"),
+    );
     header.set_title_widget(Some(&header_title));
     let navigation_toggle = gtk::ToggleButton::new();
-    navigation_toggle.set_icon_name("sidebar-show-symbolic");
+    navigation_toggle.set_icon_name("open-menu-symbolic");
     navigation_toggle.set_active(true);
-    navigation_toggle.set_tooltip_text(Some("Pokaż lub ukryj menu nawigacji"));
+    navigation_toggle.set_tooltip_text(Some(t(
+        "Pokaż lub ukryj menu nawigacji",
+        "Show or hide navigation",
+    )));
     header.pack_start(&navigation_toggle);
     let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
-    refresh.set_tooltip_text(Some("Odśwież stan instalacji"));
+    refresh.set_tooltip_text(Some(t(
+        "Odśwież stan instalacji",
+        "Refresh installation status",
+    )));
     header.pack_end(&refresh);
+    let language_choice = gtk::DropDown::from_strings(&["PL", "EN"]);
+    language_choice.set_selected(Language::selected().index());
+    language_choice.set_tooltip_text(Some(t("Język interfejsu", "Interface language")));
+    header.pack_end(&language_choice);
 
     // Long operation messages belong in a dedicated status bar, not the header.
-    let cancel_button = gtk::Button::with_label("Anuluj");
-    cancel_button.set_tooltip_text(Some(
+    let cancel_button = gtk::Button::with_label(t("Anuluj", "Cancel"));
+    cancel_button.set_tooltip_text(Some(t(
         "Anuluje tylko bezpieczne zadania odczytu i diagnostyki",
-    ));
+        "Cancels read-only scans and diagnostic operations only",
+    )));
     cancel_button.set_sensitive(false);
+    cancel_button.set_visible(false);
     let spinner = gtk::Spinner::new();
-    let activity = gtk::Label::new(Some("Gotowe"));
+    let activity = gtk::Label::new(Some(t("Gotowe", "Ready")));
     activity.add_css_class("dim-label");
     activity.set_xalign(0.0);
     activity.set_hexpand(true);
@@ -508,26 +696,61 @@ pub fn build(app: &adw::Application) {
     status_bar.append(&spinner);
     status_bar.append(&activity);
     status_bar.append(&cancel_button);
+    status_bar.set_visible(false);
     toolbar.add_bottom_bar(&status_bar);
 
     let stack = gtk::Stack::new();
     stack.set_hexpand(true);
     stack.set_vexpand(true);
     stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
-    let sidebar = gtk::StackSidebar::new();
-    sidebar.set_stack(&stack);
+    // Explicit navigation rows always show all five destinations. GtkStackSidebar
+    // showed only the selected page on some Bazzite KDE configurations.
+    let sidebar = gtk::ListBox::new();
+    sidebar.set_selection_mode(gtk::SelectionMode::Single);
     sidebar.set_size_request(190, -1);
     sidebar.add_css_class("navigation-sidebar");
+    let nav_entries = [
+        (t("Pulpit", "Dashboard"), "view-dashboard-symbolic"),
+        (
+            t("Instalacja", "Installation"),
+            "system-software-install-symbolic",
+        ),
+        (
+            t("Dodatki Plasma", "Plasma Addons"),
+            "application-x-addon-symbolic",
+        ),
+        (t("Automatyzacja", "Automation"), "alarm-symbolic"),
+        (t("Dziennik", "Log"), "text-x-generic-symbolic"),
+    ];
+    for (label, icon_name) in nav_entries {
+        let item = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+        item.set_margin_start(12);
+        item.set_margin_end(12);
+        item.set_margin_top(10);
+        item.set_margin_bottom(10);
+        item.append(&gtk::Image::from_icon_name(icon_name));
+        let text = gtk::Label::new(Some(label));
+        text.set_xalign(0.0);
+        item.append(&text);
+        let row = gtk::ListBoxRow::new();
+        row.set_child(Some(&item));
+        sidebar.append(&row);
+    }
     let navigation = gtk::Box::new(gtk::Orientation::Vertical, 8);
     navigation.set_margin_top(20);
-    let navigation_heading = gtk::Label::new(Some("NAWIGACJA"));
+    let navigation_heading = gtk::Label::new(Some(t("NAWIGACJA", "NAVIGATION")));
     navigation_heading.add_css_class("caption");
     navigation_heading.add_css_class("dim-label");
     navigation_heading.set_xalign(0.0);
     navigation_heading.set_margin_start(16);
     navigation_heading.set_margin_bottom(10);
     navigation.append(&navigation_heading);
-    navigation.append(&sidebar);
+    let nav_scroll = gtk::ScrolledWindow::builder()
+        .vexpand(true)
+        .hscrollbar_policy(gtk::PolicyType::Never)
+        .child(&sidebar)
+        .build();
+    navigation.append(&nav_scroll);
     let sidebar_revealer = gtk::Revealer::new();
     sidebar_revealer.set_transition_type(gtk::RevealerTransitionType::SlideRight);
     sidebar_revealer.set_reveal_child(true);
@@ -571,25 +794,63 @@ pub fn build(app: &adw::Application) {
     window.set_content(Some(&overlay));
 
     let dashboard = page(
-        "Pulpit",
-        "Wszystko, czego potrzebujesz do konfiguracji aktualizacji dodatków KDE.",
+        t("Pulpit", "Dashboard"),
+        t(
+            "Wszystko, czego potrzebujesz do konfiguracji aktualizacji dodatków KDE.",
+            "Install, configure and monitor KDE addon updates in one place.",
+        ),
     );
 
     let welcome = info_card(
-        "Zacznij w trzech krokach",
-        "1. Sprawdź środowisko i zainstaluj plasmoid-updater.\n2. Przejrzyj dodatki Plasma i dostępne aktualizacje.\n3. W Automatyzacji ustaw harmonogram i przetestuj konfigurację.",
+        t("Zacznij w trzech krokach", "Get started in three steps"),
+        t("1. Sprawdź środowisko i zainstaluj plasmoid-updater.\n2. Przejrzyj dodatki Plasma i dostępne aktualizacje.\n3. W Automatyzacji ustaw harmonogram i przetestuj konfigurację.",
+          "1. Check your system and install plasmoid-updater.\n2. Review installed Plasma addons and available updates.\n3. Set a schedule in Automation and test the configuration."),
     );
     dashboard.append(&welcome);
 
+    let tiles = gtk::FlowBox::new();
+    tiles.set_selection_mode(gtk::SelectionMode::None);
+    tiles.set_min_children_per_line(1);
+    tiles.set_max_children_per_line(2);
+    tiles.set_column_spacing(12);
+    tiles.set_row_spacing(12);
+    tiles.set_homogeneous(true);
+    let (environment_tile, environment_value) =
+        status_tile(t("Bazzite KDE", "Bazzite KDE"), "computer-symbolic");
+    let (updater_tile, updater_value) =
+        status_tile("plasmoid-updater", "system-software-update-symbolic");
+    let (agent_tile, agent_value) = status_tile(
+        t("Agent aktualizacji", "Update agent"),
+        "emblem-synchronizing-symbolic",
+    );
+    let (timer_tile, timer_value) = status_tile(t("Harmonogram", "Schedule"), "alarm-symbolic");
+    for tile in [&environment_tile, &updater_tile, &agent_tile, &timer_tile] {
+        tiles.insert(tile, -1);
+    }
+    dashboard.append(&tiles);
+
+    let repair_button = button(t("Napraw agenta", "Repair agent"), true);
+    let repair_notice = action_row(
+        t("Agent wymaga aktualizacji", "Update agent needs repair"),
+        t("Zainstalowany agent nie odpowiada wersji instalatora. Naprawa wymienia tylko binarkę agenta, nie zmienia timera ani ustawień.",
+          "The agent does not match the installer version. Repair replaces only the agent binary, keeping your timer and settings."),
+        &repair_button,
+    );
+    repair_notice.set_visible(backend::agent_needs_repair());
+    dashboard.append(&repair_notice);
+
     let environment = adw::PreferencesGroup::new();
-    environment.set_title("Stan instalacji");
-    let diagnose_button = button("Sprawdź składniki", false);
+    environment.set_title(t("Diagnostyka", "Diagnostics"));
+    let diagnose_button = button(t("Sprawdź składniki", "Check requirements"), false);
     environment.add(&action_row(
-        "Diagnostyka środowiska",
-        "Bazzite, KDE, curl, Homebrew, bsdtar, kpackagetool6, systemd i instalacja",
+        t("Diagnostyka środowiska", "System diagnostics"),
+        t(
+            "Bazzite, KDE, curl, Homebrew, bsdtar, kpackagetool6, systemd i instalacja",
+            "Check Bazzite, KDE, curl, Homebrew, bsdtar, kpackagetool6 and systemd",
+        ),
         &diagnose_button,
     ));
-    let status = gtk::Label::new(Some(&backend::status()));
+    let status = gtk::Label::new(Some(&backend::status_localized(english())));
     status.set_xalign(0.0);
     status.set_wrap(true);
     status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
@@ -597,70 +858,120 @@ pub fn build(app: &adw::Application) {
     status.set_margin_top(8);
     status.set_margin_bottom(8);
     status.add_css_class("caption");
-    environment.add(&status);
+    let diagnostics = gtk::Expander::new(Some(t(
+        "Szczegóły stanu i ścieżki",
+        "Status details and paths",
+    )));
+    diagnostics.set_child(Some(&status));
+    environment.add(&diagnostics);
     dashboard.append(&environment);
-    let footer =
-        gtk::LinkButton::with_label(backend::UPSTREAM, "Projekt źródłowy plasmoid-updater");
+    let footer = gtk::LinkButton::with_label(
+        backend::UPSTREAM,
+        t(
+            "Projekt źródłowy plasmoid-updater",
+            "Upstream plasmoid-updater project",
+        ),
+    );
     footer.set_halign(gtk::Align::Start);
     dashboard.append(&footer);
-    add_page(&stack, "dashboard", "Pulpit", &dashboard);
+    add_page(&stack, "dashboard", t("Pulpit", "Dashboard"), &dashboard);
 
     let installation = page(
-        "Instalacja",
-        "Instalacja z GitHub i ręczna obsługa aktualizacji przez oryginalny plasmoid-updater.",
+        t("Instalacja", "Installation"),
+        t(
+            "Instalacja z GitHub i ręczna obsługa aktualizacji przez oryginalny plasmoid-updater.",
+            "Install from GitHub and manage addon updates using the original plasmoid-updater.",
+        ),
     );
 
     let install_group = adw::PreferencesGroup::new();
-    install_group.set_title("Instalacja i aktualizacje");
-    let install_button = button("Zainstaluj / uaktualnij", true);
+    install_group.set_title(t("Instalacja i aktualizacje", "Installation and updates"));
+    let install_button = button(t("Zainstaluj / uaktualnij", "Install / upgrade"), true);
     install_group.add(&action_row(
-        "Instaluj plasmoid-updater",
-        "Wykrywa istniejącą wersję; pobiera tylko nowszą i weryfikuje SHA-256",
+        t("Instaluj plasmoid-updater", "Install plasmoid-updater"),
+        t(
+            "Wykrywa istniejącą wersję; pobiera tylko nowszą i weryfikuje SHA-256",
+            "Detects an existing version, downloads only newer releases and verifies SHA-256",
+        ),
         &install_button,
     ));
-    let check_button = button("Sprawdź", false);
+    let check_button = button(t("Sprawdź", "Check"), false);
     install_group.add(&action_row(
-        "Dostępne aktualizacje",
-        "Sprawdza wersje dodatków bez dokonywania zmian",
+        t("Dostępne aktualizacje", "Available updates"),
+        t(
+            "Sprawdza wersje dodatków bez dokonywania zmian",
+            "Checks addon versions without making changes",
+        ),
         &check_button,
     ));
-    let dry_run_button = button("Symuluj", false);
+    let dry_run_button = button(t("Symuluj", "Simulate"), false);
     install_group.add(&action_row(
-        "Symulacja aktualizacji",
-        "Wyświetla plan bez instalacji",
+        t("Symulacja aktualizacji", "Update simulation"),
+        t(
+            "Wyświetla plan bez instalacji",
+            "Previews planned updates without installing",
+        ),
         &dry_run_button,
     ));
-    let update_button = button("Aktualizuj wszystko teraz", false);
+    let update_button = button(t("Aktualizuj wszystko teraz", "Update now"), false);
     install_group.add(&action_row(
-        "Ręczna aktualizacja",
-        "Sprawdza GitHub (opcjonalnie), następnie aktualizuje dodatki KDE Store",
+        t("Ręczna aktualizacja", "Manual update"),
+        t(
+            "Sprawdza GitHub (opcjonalnie), następnie aktualizuje dodatki KDE Store",
+            "Optionally checks GitHub, then installs available KDE Store addon updates",
+        ),
         &update_button,
     ));
     installation.append(&install_group);
-    add_page(&stack, "installation", "Instalacja", &installation);
+    add_page(
+        &stack,
+        "installation",
+        t("Instalacja", "Installation"),
+        &installation,
+    );
 
     let addons_page = page(
-        "Dodatki Plasma",
-        "Komponenty wykrywane przez plasmoid-updater. Dodatki systemowe są wyświetlane tylko do odczytu.",
+        t("Dodatki Plasma", "Plasma Addons"),
+        t("Komponenty wykrywane przez plasmoid-updater. Dodatki systemowe są wyświetlane tylko do odczytu.",
+          "Components detected by plasmoid-updater. System-wide addons are read-only."),
     );
     let addons_group = adw::PreferencesGroup::new();
-    addons_group.set_title("Zainstalowane dodatki KDE Store");
-    let scan_button = button("Skanuj dodatki", true);
+    addons_group.set_title(t(
+        "Zainstalowane dodatki KDE Store",
+        "Installed KDE Store addons",
+    ));
+    let scan_button = button(t("Skanuj dodatki", "Scan addons"), true);
     addons_group.add(&action_row(
-        "Odczytaj dodatki użytkownika i systemowe",
-        "Skanowanie niczego nie instaluje, nie usuwa ani nie modyfikuje",
+        t(
+            "Odczytaj dodatki użytkownika i systemowe",
+            "Scan user and system addons",
+        ),
+        t(
+            "Skanowanie niczego nie instaluje, nie usuwa ani nie modyfikuje",
+            "Scanning never installs, removes or modifies addons",
+        ),
         &scan_button,
     ));
     let inventory_filters = gtk::Box::new(gtk::Orientation::Vertical, 10);
     let inventory_search = gtk::SearchEntry::new();
-    inventory_search.set_placeholder_text(Some("Szukaj nazwy lub rodzaju dodatku"));
+    inventory_search.set_placeholder_text(Some(t(
+        "Szukaj nazwy lub rodzaju dodatku",
+        "Search by addon name or type",
+    )));
     inventory_search.set_hexpand(true);
-    let inventory_scope = gtk::DropDown::from_strings(&["Wszystkie", "Użytkownika", "Systemowe"]);
+    let inventory_scope = gtk::DropDown::from_strings(&[
+        t("Wszystkie", "All"),
+        t("Użytkownika", "User"),
+        t("Systemowe", "System"),
+    ]);
     inventory_scope.set_halign(gtk::Align::Start);
     inventory_filters.append(&inventory_search);
     inventory_filters.append(&inventory_scope);
     addons_group.add(&inventory_filters);
-    let inventory_count = gtk::Label::new(Some("Nie skanowano jeszcze dodatków."));
+    let inventory_count = gtk::Label::new(Some(t(
+        "Nie skanowano jeszcze dodatków.",
+        "Addons have not been scanned yet.",
+    )));
     inventory_count.set_xalign(0.0);
     inventory_count.set_wrap(true);
     inventory_count.add_css_class("dim-label");
@@ -670,20 +981,29 @@ pub fn build(app: &adw::Application) {
     inventory_list.add_css_class("boxed-list");
     empty_list_message(
         &inventory_list,
-        "Kliknij „Skanuj dodatki”, aby wyświetlić zainstalowane komponenty.",
+        t(
+            "Kliknij „Skanuj dodatki”, aby wyświetlić zainstalowane komponenty.",
+            "Click Scan addons to view installed components.",
+        ),
     );
     addons_group.add(&inventory_list);
     addons_page.append(&addons_group);
 
     let updates_group = adw::PreferencesGroup::new();
-    updates_group.set_title("Dostępne aktualizacje");
-    let scan_updates_button = button("Sprawdź wersje", false);
+    updates_group.set_title(t("Dostępne aktualizacje", "Available updates"));
+    let scan_updates_button = button(t("Sprawdź wersje", "Check versions"), false);
     updates_group.add(&action_row(
-        "Sprawdź aktualizacje KDE Store",
-        "Odczytuje dostępne wersje przez plasmoid-updater check --json",
+        t("Sprawdź aktualizacje KDE Store", "Check KDE Store updates"),
+        t(
+            "Odczytuje dostępne wersje przez plasmoid-updater check --json",
+            "Reads available versions using plasmoid-updater check --json",
+        ),
         &scan_updates_button,
     ));
-    let updates_count = gtk::Label::new(Some("Nie sprawdzano jeszcze aktualizacji."));
+    let updates_count = gtk::Label::new(Some(t(
+        "Nie sprawdzano jeszcze aktualizacji.",
+        "Updates have not been checked yet.",
+    )));
     updates_count.set_xalign(0.0);
     updates_count.set_wrap(true);
     updates_count.add_css_class("dim-label");
@@ -693,58 +1013,94 @@ pub fn build(app: &adw::Application) {
     updates_list.add_css_class("boxed-list");
     empty_list_message(
         &updates_list,
-        "Kliknij „Sprawdź wersje”, aby zobaczyć dostępne aktualizacje.",
+        t(
+            "Kliknij „Sprawdź wersje”, aby zobaczyć dostępne aktualizacje.",
+            "Click Check versions to see available updates.",
+        ),
     );
     updates_group.add(&updates_list);
     addons_page.append(&updates_group);
-    add_page(&stack, "addons", "Dodatki Plasma", &addons_page);
+    add_page(
+        &stack,
+        "addons",
+        t("Dodatki Plasma", "Plasma Addons"),
+        &addons_page,
+    );
 
     let automation_page = page(
-        "Automatyzacja",
-        "Aktualizowanie dodatków oraz opcjonalnie samego programu w tle przez systemd --user.",
+        t("Automatyzacja", "Automation"),
+        t(
+            "Aktualizowanie dodatków oraz opcjonalnie samego programu w tle przez systemd --user.",
+            "Update addons and optionally plasmoid-updater automatically with systemd --user.",
+        ),
     );
     let automation_group = adw::PreferencesGroup::new();
-    automation_group.set_title("Stan harmonogramu");
-    let automation = gtk::Label::new(Some(&backend::automation_report()));
+    automation_group.set_title(t("Stan harmonogramu", "Schedule status"));
+    let automation = gtk::Label::new(Some(&backend::automation_report_localized(english())));
     automation.set_xalign(0.0);
     automation.set_wrap(true);
     automation.set_wrap_mode(gtk::pango::WrapMode::WordChar);
     automation.set_selectable(true);
-    automation.set_margin_top(12);
-    automation.set_margin_bottom(12);
-    automation_group.add(&automation);
+    automation.set_margin_top(14);
+    automation.set_margin_bottom(14);
+    automation.set_margin_start(16);
+    automation.set_margin_end(16);
+    let automation_card = gtk::Box::new(gtk::Orientation::Vertical, 0);
+    automation_card.add_css_class("card");
+    automation_card.append(&automation);
+    automation_group.add(&automation_card);
     automation_page.append(&automation_group);
 
     let settings_group = adw::PreferencesGroup::new();
-    settings_group.set_title("Harmonogram aktualizacji");
+    settings_group.set_title(t("Harmonogram aktualizacji", "Update schedule"));
     let behavior_group = adw::PreferencesGroup::new();
-    behavior_group.set_title("Dodatki i powiadomienia");
+    behavior_group.set_title(t("Dodatki i powiadomienia", "Addons and notifications"));
     let migration_group = adw::PreferencesGroup::new();
-    migration_group.set_title("Ustawienia zaawansowane");
+    migration_group.set_title(t("Ustawienia zaawansowane", "Advanced settings"));
     let apply_group = adw::PreferencesGroup::new();
-    apply_group.set_title("Zapis i testowanie");
+    apply_group.set_title(t("Zapis i testowanie", "Save and test"));
     let initial = match backend::home().and_then(|h| backend::initial_settings(&h)) {
         Ok(settings) => settings,
         Err(error) => {
-            status.set_text(&format!("{}\nUstawienia: {error:#}", backend::status()));
+            status.set_text(&format!(
+                "{}\n{}: {error:#}",
+                backend::status_localized(english()),
+                t("Ustawienia", "Settings")
+            ));
             Settings::default()
         }
     };
     let automatic = switch_row(
-        "Automatyczne aktualizacje w tle",
-        "Zadanie systemd uruchamia się według harmonogramu",
+        t(
+            "Automatyczne aktualizacje w tle",
+            "Automatic background updates",
+        ),
+        t(
+            "Zadanie systemd uruchamia się według harmonogramu",
+            "The systemd timer runs the update task on schedule",
+        ),
         initial.automatic,
     );
     settings_group.add(&automatic);
 
     let auto_update_tool = switch_row(
-        "Aktualizuj również plasmoid-updater",
-        "Każdy cykl sprawdza wydanie na GitHub i pobiera program tylko, gdy jest nowszy",
+        t(
+            "Aktualizuj również plasmoid-updater",
+            "Also update plasmoid-updater",
+        ),
+        t(
+            "Każdy cykl sprawdza wydanie na GitHub i pobiera program tylko, gdy jest nowszy",
+            "Every cycle checks GitHub and downloads the tool only when a newer version exists",
+        ),
         initial.auto_update_tool,
     );
     settings_group.add(&auto_update_tool);
 
-    let frequency = gtk::DropDown::from_strings(&["Co 6 godzin", "Co 12 godzin", "Raz dziennie"]);
+    let frequency = gtk::DropDown::from_strings(&[
+        t("Co 6 godzin", "Every 6 hours"),
+        t("Co 12 godzin", "Every 12 hours"),
+        t("Raz dziennie", "Daily"),
+    ]);
     frequency.set_halign(gtk::Align::Start);
     frequency.set_selected(match initial.frequency_hours {
         6 => 0,
@@ -752,8 +1108,11 @@ pub fn build(app: &adw::Application) {
         _ => 2,
     });
     let frequency_row = info_card(
-        "Harmonogram",
-        "Pominięty termin jest nadrabiany po zalogowaniu; opóźnienie do 20 minut",
+        t("Harmonogram", "Schedule"),
+        t(
+            "Pominięty termin jest nadrabiany po zalogowaniu; opóźnienie do 20 minut",
+            "Missed runs are caught up after login, with up to 20 minutes of randomized delay",
+        ),
     );
     frequency.set_margin_start(16);
     frequency.set_margin_end(16);
@@ -762,88 +1121,139 @@ pub fn build(app: &adw::Application) {
     settings_group.add(&frequency_row);
 
     let restart = switch_row(
-        "Restart Plasma po automatycznej aktualizacji",
-        "Domyślnie wyłączony — restart mógłby przerwać sesję KDE",
+        t(
+            "Restart Plasma po automatycznej aktualizacji",
+            "Restart Plasma after automatic updates",
+        ),
+        t(
+            "Domyślnie wyłączony — restart mógłby przerwać sesję KDE",
+            "Off by default — restarting Plasma could interrupt your KDE session",
+        ),
         initial.restart_plasma,
     );
-    behavior_group.add(&restart);
+    migration_group.add(&restart);
 
     let notify_success = switch_row(
-        "Powiadamiaj po zakończonym cyklu",
-        "Wymaga dostępnego notify-send i sesji powiadomień KDE",
+        t(
+            "Powiadamiaj po zakończonym cyklu",
+            "Notify after successful updates",
+        ),
+        t(
+            "Wymaga dostępnego notify-send i sesji powiadomień KDE",
+            "Requires notify-send and an active KDE notification session",
+        ),
         initial.notify_on_success,
     );
     behavior_group.add(&notify_success);
     let notify_error = switch_row(
-        "Powiadamiaj o błędach aktualizacji",
-        "Domyślnie włączone; brak usługi powiadomień nie zatrzymuje aktualizacji",
+        t(
+            "Powiadamiaj o błędach aktualizacji",
+            "Notify on update errors",
+        ),
+        t(
+            "Domyślnie włączone; brak usługi powiadomień nie zatrzymuje aktualizacji",
+            "Enabled by default; missing notifications never block updates",
+        ),
         initial.notify_on_error,
     );
     behavior_group.add(&notify_error);
 
     let migrate_legacy = switch_row(
-        "Przejmij istniejącą usługę i harmonogram plasmoid-updater",
-        "Zapisze kopie starych jednostek, wyłączy poprzedni timer i skonfiguruje nowy",
+        t(
+            "Przejmij istniejącą usługę i harmonogram plasmoid-updater",
+            "Take over existing plasmoid-updater systemd units",
+        ),
+        t(
+            "Zapisze kopie starych jednostek, wyłączy poprzedni timer i skonfiguruje nowy",
+            "Backs up old units, disables the previous timer and configures the new one",
+        ),
         false,
     );
     migration_group.add(&migrate_legacy);
 
     let exclusions = gtk::Entry::new();
     exclusions.set_text(&initial.excluded_packages.join(", "));
-    exclusions.set_placeholder_text(Some("np. moja-wtyczka, drugi-motyw"));
+    exclusions.set_placeholder_text(Some(t(
+        "np. moja-wtyczka, drugi-motyw",
+        "e.g. my-widget, second-theme",
+    )));
     exclusions.set_hexpand(true);
     exclusions.set_margin_start(16);
     exclusions.set_margin_end(16);
     exclusions.set_margin_bottom(14);
     let exclusions_card = info_card(
-        "Wykluczone dodatki",
-        "Nazwy komponentów, których nie należy aktualizować. Oddziel je przecinkami.",
+        t("Wykluczone dodatki", "Excluded addons"),
+        t(
+            "Nazwy komponentów, których nie należy aktualizować. Oddziel je przecinkami.",
+            "Components to skip during updates. Separate names with commas.",
+        ),
     );
     exclusions_card.append(&exclusions);
     behavior_group.add(&exclusions_card);
-    let unsaved = gtk::Label::new(Some(
+    let unsaved = gtk::Label::new(Some(t(
         "Niezapisane zmiany — najpierw kliknij «Zapisz i zastosuj».",
-    ));
+        "Unsaved changes — click Save and apply before updating.",
+    )));
     unsaved.add_css_class("warning");
     unsaved.set_xalign(0.0);
     unsaved.set_wrap(true);
     unsaved.set_visible(false);
     apply_group.add(&unsaved);
-    let save_button = button("Zapisz i zastosuj", true);
+    let save_button = button(t("Zapisz i zastosuj", "Save and apply"), true);
     let save_row = action_row(
-        "Zapisz ustawienia",
-        "Zapisuje TOML i włącza lub wyłącza timer systemd użytkownika",
+        t("Zapisz ustawienia", "Save settings"),
+        t(
+            "Zapisuje TOML i włącza lub wyłącza timer systemd użytkownika",
+            "Saves TOML and enables or disables your user systemd timer",
+        ),
         &save_button,
     );
     apply_group.add(&save_row);
 
-    let test_button = button("Przetestuj", false);
+    let test_button = button(t("Przetestuj", "Test"), false);
     apply_group.add(&action_row(
-        "Test końcowy konfiguracji",
-        "Sprawdza TOML, narzędzia, agenta, systemd oraz dry-run bez zmian w dodatkach",
+        t("Test końcowy konfiguracji", "Configuration check"),
+        t(
+            "Sprawdza TOML, narzędzia, agenta, systemd oraz dry-run bez zmian w dodatkach",
+            "Checks TOML, dependencies, agent, systemd and a dry run without changing addons",
+        ),
         &test_button,
     ));
-    let run_service_button = button("Uruchom teraz", false);
+    let run_service_button = button(t("Uruchom teraz", "Run now"), false);
     apply_group.add(&action_row(
-        "Przetestuj pełny cykl aktualizacji",
-        "Uruchamia usługę systemd i instaluje dostępne aktualizacje (wykonuje zmiany)",
+        t(
+            "Przetestuj pełny cykl aktualizacji",
+            "Run a full update cycle",
+        ),
+        t(
+            "Uruchamia usługę systemd i instaluje dostępne aktualizacje (wykonuje zmiany)",
+            "Starts the systemd service and installs available updates (makes changes)",
+        ),
         &run_service_button,
     ));
     automation_page.append(&settings_group);
     automation_page.append(&behavior_group);
     automation_page.append(&migration_group);
     automation_page.append(&apply_group);
-    add_page(&stack, "automation", "Automatyzacja", &automation_page);
+    add_page(
+        &stack,
+        "automation",
+        t("Automatyzacja", "Automation"),
+        &automation_page,
+    );
 
     let journal = page(
-        "Dziennik",
-        "Wyniki operacji instalatora oraz historia usługi plasmoid-updater.service.",
+        t("Dziennik", "Log"),
+        t(
+            "Wyniki operacji instalatora oraz historia usługi plasmoid-updater.service.",
+            "Installer output and plasmoid-updater.service history.",
+        ),
     );
     let log_group = adw::PreferencesGroup::new();
-    log_group.set_title("Dziennik operacji");
-    let journal_button = button("Wczytaj historię systemd", false);
+    log_group.set_title(t("Dziennik operacji", "Operation log"));
+    let journal_button = button(t("Wczytaj historię systemd", "Load systemd history"), false);
     log_group.add(&action_row(
-        "Ostatnie 100 wpisów usługi",
+        t("Ostatnie 100 wpisów usługi", "Last 100 service entries"),
         "journalctl --user -u plasmoid-updater.service",
         &journal_button,
     ));
@@ -858,7 +1268,8 @@ pub fn build(app: &adw::Application) {
         .bottom_margin(10)
         .build();
     let output = log_view.buffer();
-    output.set_text("Gotowe. Sprawdź składniki, zainstaluj program i zapisz harmonogram. Na końcu wykonaj test.");
+    output.set_text(t("Gotowe. Sprawdź składniki, zainstaluj program i zapisz harmonogram. Na końcu wykonaj test.",
+        "Ready. Check requirements, install the tool and save a schedule. Finally, run a test."));
     let log_scroll = gtk::ScrolledWindow::builder()
         .min_content_height(420)
         .vexpand(true)
@@ -867,7 +1278,30 @@ pub fn build(app: &adw::Application) {
     log_scroll.add_css_class("card");
     log_group.add(&log_scroll);
     journal.append(&log_group);
-    add_page(&stack, "journal", "Dziennik", &journal);
+    add_page(&stack, "journal", t("Dziennik", "Log"), &journal);
+
+    const PAGE_KEYS: [&str; 5] = [
+        "dashboard",
+        "installation",
+        "addons",
+        "automation",
+        "journal",
+    ];
+    let stack_for_navigation = stack.clone();
+    sidebar.connect_row_selected(move |_, row| {
+        if let Some(index) = row.map(|row| row.index()) {
+            if let Some(key) = PAGE_KEYS.get(index as usize) {
+                stack_for_navigation.set_visible_child_name(key);
+            }
+        }
+    });
+    let selected_index = PAGE_KEYS
+        .iter()
+        .position(|name| *name == initial_page)
+        .unwrap_or(0);
+    if let Some(row) = sidebar.row_at_index(selected_index as i32) {
+        sidebar.select_row(Some(&row));
+    }
 
     let dirty = Rc::new(Cell::new(false));
     let mark_dirty: Rc<dyn Fn()> = {
@@ -901,12 +1335,14 @@ pub fn build(app: &adw::Application) {
         output,
         toast: overlay,
         activity,
+        status_bar,
         spinner,
         cancel_button: cancel_button.clone(),
         cancel_token: Rc::new(RefCell::new(None)),
         dirty,
         unsaved,
         buttons: Rc::new(vec![
+            repair_button.clone(),
             diagnose_button.clone(),
             install_button.clone(),
             check_button.clone(),
@@ -920,6 +1356,7 @@ pub fn build(app: &adw::Application) {
             journal_button.clone(),
         ]),
         settings_inputs: Rc::new(vec![
+            language_choice.clone().upcast(),
             automatic.clone().upcast(),
             auto_update_tool.clone().upcast(),
             frequency.clone().upcast(),
@@ -939,13 +1376,49 @@ pub fn build(app: &adw::Application) {
         updates_count,
         inventory_search: inventory_search.clone(),
         inventory_scope: inventory_scope.clone(),
+        environment_value,
+        updater_value,
+        agent_value,
+        timer_value,
+        repair_button: repair_button.clone(),
+        repair_notice,
     };
+    refresh_status(&parts);
     let refresh_parts = parts.clone();
     refresh.connect_clicked(move |_| {
-        refresh_parts.status.set_text(&backend::status());
-        refresh_parts
-            .automation
-            .set_text(&backend::automation_report());
+        refresh_status(&refresh_parts);
+    });
+    let parts_language = parts.clone();
+    let app_language = app.clone();
+    let window_language = window.clone();
+    let stack_language = stack.clone();
+    language_choice.connect_selected_notify(move |choice| {
+        let requested = Language::from_index(choice.selected());
+        if requested == Language::selected() {
+            return;
+        }
+        if parts_language.busy.get() || parts_language.dirty.get() {
+            parts_language.toast.add_toast(adw::Toast::new(t(
+                "Zakończ operację i zapisz zmiany przed zmianą języka",
+                "Finish the operation and save your changes before switching language",
+            )));
+            choice.set_selected(Language::selected().index());
+            return;
+        }
+        if let Err(error) = requested.save() {
+            parts_language.toast.add_toast(adw::Toast::new(&format!(
+                "{}: {error:#}",
+                t("Nie udało się zapisać języka", "Could not save language")
+            )));
+            choice.set_selected(Language::selected().index());
+            return;
+        }
+        let page = stack_language
+            .visible_child_name()
+            .map(|name| name.to_string())
+            .unwrap_or_else(|| "dashboard".into());
+        build_with_page(&app_language, &page);
+        window_language.close();
     });
     let search_parts = parts.clone();
     inventory_search.connect_search_changed(move |_| render_inventory(&search_parts));
@@ -956,7 +1429,9 @@ pub fn build(app: &adw::Application) {
         if let Some(token) = cancel_parts.cancel_token.borrow().as_ref() {
             token.store(true, Ordering::Relaxed);
             cancel_parts.cancel_button.set_sensitive(false);
-            cancel_parts.activity.set_text("Anulowanie zadania…");
+            cancel_parts
+                .activity
+                .set_text(t("Anulowanie zadania…", "Cancelling operation…"));
         }
     });
 
@@ -965,6 +1440,15 @@ pub fn build(app: &adw::Application) {
         launch(
             parts_diagnose.clone(),
             Task::Operation(Job::Diagnose),
+            Settings::default(),
+        )
+    });
+
+    let parts_repair = parts.clone();
+    repair_button.connect_clicked(move |_| {
+        launch(
+            parts_repair.clone(),
+            Task::Operation(Job::RepairAgent),
             Settings::default(),
         )
     });
@@ -1021,9 +1505,10 @@ pub fn build(app: &adw::Application) {
     let read_update = read_form.clone();
     update_button.connect_clicked(move |_| {
         if parts_update.dirty.get() {
-            parts_update.toast.add_toast(adw::Toast::new(
+            parts_update.toast.add_toast(adw::Toast::new(t(
                 "Najpierw zapisz zmienione ustawienia automatyzacji i wykluczeń",
-            ));
+                "Save your changed automation settings and exclusions first",
+            )));
             return;
         }
         launch(
@@ -1040,9 +1525,10 @@ pub fn build(app: &adw::Application) {
     let parts_service = parts.clone();
     run_service_button.connect_clicked(move |_| {
         if parts_service.dirty.get() {
-            parts_service.toast.add_toast(adw::Toast::new(
+            parts_service.toast.add_toast(adw::Toast::new(t(
                 "Zapisz ustawienia przed uruchomieniem cyklu",
-            ));
+                "Save settings before running the update cycle",
+            )));
             return;
         }
         launch(

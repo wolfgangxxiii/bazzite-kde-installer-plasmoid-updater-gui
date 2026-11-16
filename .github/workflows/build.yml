@@ -34,7 +34,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.1'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.2'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -50,6 +50,23 @@ jobs:
             echo "AppImage closed before the 12-second GUI smoke test window (exit $exit_code)."
             exit 1
           fi
+      - name: Smoke test English interface under Xvfb
+        run: |
+          smoke_config="$(mktemp -d)"
+          mkdir -p "$smoke_config/bazzite-plasmoid-updater-gui"
+          printf 'en\n' > "$smoke_config/bazzite-plasmoid-updater-gui/language"
+          set +e
+          timeout 8s env XDG_CONFIG_HOME="$smoke_config" G_DEBUG=fatal-criticals \
+            APPIMAGE_EXTRACT_AND_RUN=1 GDK_BACKEND=x11 \
+            xvfb-run -a ./dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage \
+            > english-smoke.log 2>&1
+          exit_code=$?
+          set -e
+          if [ "$exit_code" -ne 124 ]; then
+            cat english-smoke.log
+            echo "English GUI did not remain open for the smoke test (exit $exit_code)."
+            exit 1
+          fi
       - uses: actions/upload-artifact@v4
         with:
           name: bazzite-plasmoid-updater-gui-appimage
@@ -63,13 +80,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.1 >/dev/null 2>&1; then
-              echo "v0.5.1 already published; use a new version tag for another release."
+            if gh release view v0.5.2 >/dev/null 2>&1; then
+              echo "v0.5.2 already published; use a new version tag for another release."
             else
-              gh release create v0.5.1 dist/*.AppImage \
+              gh release create v0.5.2 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.1" \
-                --notes "Odświeżony interfejs GTK4/libadwaita: adaptacyjna i zwijana nawigacja, osobne karty z działaniami, czytelniejszy pulpit oraz dolny pasek postępu. Ustawienia automatyzacji podzielone na grupy, a formularz blokowany podczas trwających operacji. Lepsze zawijanie tekstu, wyszukiwanie dodatków i komunikaty pustych list."
+                --title "Bazzite Plasmoid Updater GUI v0.5.2" \
+                --notes "Poprawiona nawigacja: zawsze widoczne pięć zakładek z ikonami i adaptacyjne menu. Kompaktowe karty działań, panel stanu instalacji i agenta z bezpiecznym przyciskiem naprawy. Uproszczony pasek postępu i automatyzacja, czytelniejsze komunikaty systemd. Minimalistyczny wybór języka PL/EN w nagłówku z trwałym zapisem wyboru."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

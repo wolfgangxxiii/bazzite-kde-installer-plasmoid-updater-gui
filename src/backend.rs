@@ -129,6 +129,7 @@ struct UpdateResponse {
 #[derive(Clone, Copy, Debug)]
 pub enum Job {
     Install,
+    RepairAgent,
     Diagnose,
     Test,
     RunService,
@@ -255,6 +256,44 @@ fn agent_version(home: &Path) -> Option<String> {
         .trim()
         .strip_prefix("plasmoid-updater-agent ")
         .map(str::to_owned)
+}
+
+pub struct DashboardSummary {
+    pub environment_ready: bool,
+    pub updater_version: Option<String>,
+    pub agent_version: Option<String>,
+    pub agent_managed: bool,
+    pub timer_active: bool,
+}
+
+pub fn dashboard_summary() -> DashboardSummary {
+    let home = home().unwrap_or_default();
+    let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
+    let bazzite = os_release.to_lowercase().contains("bazzite");
+    let kde = env::var("XDG_CURRENT_DESKTOP")
+        .unwrap_or_default()
+        .to_uppercase()
+        .contains("KDE")
+        || home.join(".local/share/knewstuff3").is_dir();
+    let environment_ready = bazzite
+        && kde
+        && env::consts::ARCH == "x86_64"
+        && on_path("curl").is_some()
+        && bsdtar_exists(&home)
+        && (executable(Path::new("/usr/bin/kpackagetool6")) || on_path("kpackagetool6").is_some());
+    DashboardSummary {
+        environment_ready,
+        updater_version: find_existing_updater(&home).map(|(_, version)| version),
+        agent_version: agent_version(&home),
+        agent_managed: is_managed_unit(&user_units(&home).join(SERVICE))
+            && is_managed_unit(&user_units(&home).join(TIMER)),
+        timer_active: user_unit_state(TIMER, "is-active"),
+    }
+}
+
+pub fn agent_needs_repair() -> bool {
+    let summary = dashboard_summary();
+    summary.agent_managed && summary.agent_version.as_deref() != Some(env!("CARGO_PKG_VERSION"))
 }
 
 fn user_path(home: &Path) -> String {
@@ -406,33 +445,102 @@ fn unit_property(unit: &str, property: &str) -> Option<String> {
     (!value.is_empty() && value != "n/a" && value != "0").then_some(value)
 }
 
-pub fn automation_report() -> String {
+fn concise_timestamp(value: String) -> String {
+    // systemd prints English weekday names regardless of the chosen GUI language.
+    let mut parts = value.split_whitespace();
+    if matches!(
+        parts.next(),
+        Some("Mon" | "Tue" | "Wed" | "Thu" | "Fri" | "Sat" | "Sun")
+    ) {
+        parts.collect::<Vec<_>>().join(" ")
+    } else {
+        value
+    }
+}
+
+pub fn automation_report_localized(english: bool) -> String {
     let Ok(home) = home() else {
-        return "Brak dostępu do katalogu użytkownika".into();
+        return if english {
+            "Home directory unavailable"
+        } else {
+            "Brak dostępu do katalogu użytkownika"
+        }
+        .into();
     };
     if !is_managed_unit(&user_units(&home).join(TIMER)) {
-        return "Automatyzacja nie została jeszcze skonfigurowana przez instalator.".into();
+        return if english {
+            "Automatic updates have not been configured by this installer."
+        } else {
+            "Automatyzacja nie została jeszcze skonfigurowana przez instalator."
+        }
+        .into();
     }
     let enabled = user_unit_state(TIMER, "is-enabled");
     let active = user_unit_state(TIMER, "is-active");
-    let next =
-        unit_property(TIMER, "NextElapseUSecRealtime").unwrap_or_else(|| "brak terminu".into());
-    let last =
-        unit_property(TIMER, "LastTriggerUSec").unwrap_or_else(|| "jeszcze nie uruchomiono".into());
-    let result = if last == "jeszcze nie uruchomiono" {
-        "brak poprzedniego cyklu".into()
+    let next = unit_property(TIMER, "NextElapseUSecRealtime")
+        .map(concise_timestamp)
+        .unwrap_or_else(|| {
+            if english {
+                "not scheduled"
+            } else {
+                "brak terminu"
+            }
+            .into()
+        });
+    let last_value = unit_property(TIMER, "LastTriggerUSec");
+    let last = last_value
+        .clone()
+        .map(concise_timestamp)
+        .unwrap_or_else(|| {
+            if english {
+                "never"
+            } else {
+                "jeszcze nie uruchomiono"
+            }
+            .into()
+        });
+    let result = if last_value.is_none() {
+        if english {
+            "no previous run"
+        } else {
+            "brak poprzedniego cyklu"
+        }
+        .into()
     } else {
-        unit_property(SERVICE, "Result").unwrap_or_else(|| "nieznany".into())
+        let result = unit_property(SERVICE, "Result").unwrap_or_else(|| "unknown".into());
+        if !english && result == "success" {
+            "sukces".into()
+        } else if !english && result == "failed" {
+            "błąd".into()
+        } else {
+            result
+        }
     };
-    format!(
-        "Timer: {}\nNastępna aktualizacja: {next}\nOstatnie uruchomienie: {last}\nWynik ostatniej usługi: {result}",
-        if active { "aktywny" } else if enabled { "włączony, nieaktywny" } else { "wyłączony" }
-    )
+    if english {
+        format!(
+            "Timer: {}\nNext update: {next}\nLast run: {last}\nLast service result: {result}",
+            if active {
+                "active"
+            } else if enabled {
+                "enabled, inactive"
+            } else {
+                "disabled"
+            }
+        )
+    } else {
+        format!("Timer: {}\nNastępna aktualizacja: {next}\nOstatnie uruchomienie: {last}\nWynik ostatniej usługi: {result}",
+            if active { "aktywny" } else if enabled { "włączony, nieaktywny" } else { "wyłączony" })
+    }
 }
 
-pub fn status() -> String {
+pub fn status_localized(english: bool) -> String {
     let Ok(home) = home() else {
-        return "Nie można ustalić katalogu domowego".to_owned();
+        return if english {
+            "Cannot determine home directory"
+        } else {
+            "Nie można ustalić katalogu domowego"
+        }
+        .to_owned();
     };
     let os_release = fs::read_to_string("/etc/os-release").unwrap_or_default();
     let bazzite = os_release.to_lowercase().contains("bazzite");
@@ -443,24 +551,86 @@ pub fn status() -> String {
             .contains("KDE");
     let binary_status = find_existing_updater(&home)
         .map(|(path, version)| format!("plasmoid-updater {version} ({})", path.display()))
-        .unwrap_or_else(|| "plasmoid-updater: nie znaleziono".to_owned());
+        .unwrap_or_else(|| {
+            if english {
+                "plasmoid-updater: not found"
+            } else {
+                "plasmoid-updater: nie znaleziono"
+            }
+            .to_owned()
+        });
     let bsdtar = bsdtar_exists(&home);
     let managed = is_managed_unit(&user_units(&home).join(TIMER));
     let enabled = managed && user_unit_state(TIMER, "is-enabled");
     let active = managed && user_unit_state(TIMER, "is-active");
     let next = if enabled {
-        unit_property(TIMER, "NextElapseUSecRealtime").unwrap_or_else(|| "brak danych".into())
+        unit_property(TIMER, "NextElapseUSecRealtime")
+            .map(concise_timestamp)
+            .unwrap_or_else(|| {
+                if english {
+                    "unavailable"
+                } else {
+                    "brak danych"
+                }
+                .into()
+            })
     } else {
-        "wyłączony".into()
+        if english { "disabled" } else { "wyłączony" }.into()
     };
     let upstream_config = upstream_config_path(&home);
     let configuration = if upstream_config.is_file() {
-        "istnieje"
+        if english {
+            "present"
+        } else {
+            "istnieje"
+        }
+    } else if english {
+        "missing"
     } else {
         "brak"
     };
+    let agent = match agent_version(&home) {
+        Some(version) if version == env!("CARGO_PKG_VERSION") => {
+            if english {
+                "ready".to_owned()
+            } else {
+                "gotowy".to_owned()
+            }
+        }
+        Some(version) => {
+            if english {
+                format!("outdated ({version}) — save the configuration again")
+            } else {
+                format!("stara wersja ({version}) — zapisz konfigurację ponownie")
+            }
+        }
+        None => {
+            if english {
+                "missing or broken".to_owned()
+            } else {
+                "brak lub uszkodzony".to_owned()
+            }
+        }
+    };
+    let timer = if active {
+        if english {
+            "active"
+        } else {
+            "aktywny"
+        }
+    } else if enabled {
+        if english {
+            "enabled, inactive"
+        } else {
+            "włączony, ale nieaktywny"
+        }
+    } else if english {
+        "disabled"
+    } else {
+        "wyłączony"
+    };
     format!(
-        "{} Bazzite · {} KDE · {} x86_64\n{} curl · {} Homebrew · {} bsdtar · {} kpackagetool6\n{}\nKonfiguracja: {} · Agent: {}\nTimer: {} · następny termin: {}{}",
+        "{} Bazzite · {} KDE · {} x86_64\n{} curl · {} Homebrew · {} bsdtar · {} kpackagetool6\n{}\n{}: {} · Agent: {}\nTimer: {} · {}: {}{}",
         if bazzite { "✓" } else { "!" },
         if kde { "✓" } else { "!" },
         if env::consts::ARCH == "x86_64" { "✓" } else { "!" },
@@ -473,15 +643,13 @@ pub fn status() -> String {
             "!"
         },
         binary_status,
+        if english { "Configuration" } else { "Konfiguracja" },
         configuration,
-        &match agent_version(&home) {
-            Some(version) if version == env!("CARGO_PKG_VERSION") => "gotowy".to_owned(),
-            Some(version) => format!("stara wersja ({version}) — zapisz konfigurację ponownie"),
-            None => "brak lub uszkodzony".to_owned(),
-        },
-        if active { "aktywny" } else if enabled { "włączony, ale nieaktywny" } else { "wyłączony" },
+        agent,
+        timer,
+        if english { "next run" } else { "następny termin" },
         next,
-        if legacy_timer_exists(&home) { "\n! Wykryto starszy harmonogram — wymaga migracji" } else { "" }
+        if legacy_timer_exists(&home) { if english { "\n! Legacy timer detected — migration required" } else { "\n! Wykryto starszy harmonogram — wymaga migracji" } } else { "" }
     )
 }
 
@@ -491,6 +659,16 @@ pub fn execute(job: Job, settings: Settings, log: &mut dyn FnMut(&str)) -> Resul
         Job::Install => {
             install_missing_requirements(&home, log)?;
             install_updater(&home, false, log)
+        }
+        Job::RepairAgent => {
+            anyhow::ensure!(
+                is_managed_unit(&user_units(&home).join(SERVICE))
+                    && is_managed_unit(&user_units(&home).join(TIMER)),
+                "Naprawa agenta wymaga jednostek systemd utworzonych przez instalator."
+            );
+            install_agent(&home, log)?;
+            log("Zaktualizowano agenta. Kolejne uruchomienie systemd użyje nowej wersji.");
+            Ok(())
         }
         Job::Diagnose => diagnose(&home, log),
         Job::Test => test_configuration(&home, &settings, log),
@@ -1305,6 +1483,15 @@ fn save_configuration(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn systemd_timestamp_drops_english_weekday() {
+        assert_eq!(
+            concise_timestamp("Tue 2026-11-17 04:19:26 CET".into()),
+            "2026-11-17 04:19:26 CET"
+        );
+        assert_eq!(concise_timestamp("no data".into()), "no data");
+    }
 
     #[test]
     fn release_asset_uses_the_github_digest() {

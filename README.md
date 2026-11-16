@@ -24,17 +24,24 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Oddziela funkcje na pięć ekranów w bocznym menu: **Pulpit**, **Instalacja**, **Dodatki Plasma**, **Automatyzacja** i **Dziennik**.
 - Pokazuje dodatki rozpoznawane przez `plasmoid-updater list-installed --json` zarówno dla użytkownika, jak i z systemu (`--system list-installed --json` — **tylko odczyt**). Pozwala wyszukiwać i filtrować listę.
 - Wyświetla wykryte dostępne aktualizacje dodatków z KDE Store wraz z wersjami, bez dokonywania zmian podczas sprawdzania.
+- Pokazuje przyczyny błędów sprawdzania i ostrzega, jeżeli skanowanie dodatków systemowych zakończyło się tylko częściowo.
+- Odświeża listę komponentów po ręcznym cyklu aktualizacji.
 - Instaluje narzędzie w `~/.local/bin` — bez `sudo` i bez zmiany obrazu Bazzite.
 - Odczytuje wykluczenia z istniejącego `plasmoid-updater.toml`, nie nadpisując pozostałych indywidualnych opcji pliku.
 - Wykrywa starsze jednostki systemd. Przejęcie niezarządzanych `plasmoid-updater.service/timer` wymaga zgody użytkownika; ich kopie są zachowywane przed zmianą.
+- W razie błędu zapisu przywraca również wcześniejsze ustawienia, konfigurację upstream i agenta, a nie tylko jednostki systemd.
 - Sprawdza aktualizacje, pokazuje symulację (`--dry-run`) i wykonuje aktualizacje dodatków użytkownika.
 - **Samoczynnie aktualizuje również `plasmoid-updater`:** w każdym cyklu sprawdza nowe wydanie na GitHub, porównuje wersję i pobiera binarkę tylko wtedy, gdy jest nowsza.
 - Konfiguruje automatyczne aktualizacje dodatków i narzędzia co **6, 12 lub 24 godziny** przez timer `systemd --user` — **bez konieczności uruchamiania GUI w tle**.
 - Instaluje lekki, niezależny agent aktualizacji uruchamiany przez systemd; działa nawet po zamknięciu AppImage.
+- Sprawdza, czy wersja zainstalowanego agenta odpowiada wersji instalatora.
 - Umożliwia oddzielne wyłączenie automatycznej aktualizacji samego `plasmoid-updater`.
 - Gdy brakuje `bsdtar`, próbuje zainstalować `libarchive` przez Homebrew (`brew install libarchive`).
 - Pozwala wykluczyć konkretne dodatki z aktualizacji.
 - Pozwala zdecydować, czy po automatycznej aktualizacji restartować Plasma (domyślnie **nie**).
+- Umożliwia opcjonalne powiadomienia KDE o błędach i udanych cyklach przez `notify-send` (powiadomienia o błędach włączone domyślnie).
+- Sygnalizuje niezapisane zmiany; test konfiguracji sprawdza rzeczywiście zapisane ustawienia i stan timera.
+- Pokazuje aktywną operację i pozwala anulować zadania diagnostyczne oraz skanowanie. Anulowanie instalacji/aktualizacji jest celowo niedostępne, żeby nie pozostawić częściowo zmienionych dodatków.
 - Zapisuje dziennik działań i wyświetla błędy w interfejsie.
 - Pokazuje aktywność timera i następny zaplanowany termin; testuje całą konfigurację przez `--dry-run`.
 - Pokazuje ostatnie uruchomienie i wynik usługi oraz umożliwia odczyt jej ostatnich 100 wpisów z `journalctl --user`.
@@ -57,8 +64,8 @@ Program **nie** aktualizuje samego Bazzite, Flatpaków, sterowników ani pakiet�
 5. W menu **Dodatki Plasma** kliknij **Skanuj dodatki** i **Sprawdź wersje**, aby przejrzeć zainstalowane komponenty i dostępne aktualizacje; możesz użyć wyszukiwania i filtru zakresu. **Symuluj** na ekranie Instalacja pokazuje plan bez zmian.
 6. W menu **Automatyzacja** włącz **Automatyczne aktualizacje w tle** i **Aktualizuj również plasmoid-updater** (oba przełączniki są domyślnie włączone).
 7. Jeśli istnieją wcześniej utworzone `plasmoid-updater.service/timer`, zaznacz **Przejmij istniejącą usługę i harmonogram plasmoid-updater**. Instalator utworzy kopie jednostek, wyłączy stary timer i dopiero wtedy skonfiguruje nowy. Wcześniejsze jednostki `bazzite-plasmoid-updater.*` utworzone przez ten instalator są wyłączane automatycznie.
-8. Wybierz harmonogram i kliknij **Zapisz i zastosuj**.
-9. Kliknij **Przetestuj**, aby zweryfikować konfigurację i symulację. **Uruchom teraz** wykonuje już prawdziwy cykl instalowania dostępnych aktualizacji. W menu **Dziennik** możesz odczytać historię usługi.
+8. Wybierz harmonogram i opcje powiadomień, a następnie kliknij **Zapisz i zastosuj**. Po zmianie ustawień bez zapisu pojawi się ostrzeżenie.
+9. Kliknij **Przetestuj**, aby zweryfikować zapisaną konfigurację i symulację. **Uruchom teraz** wykonuje już prawdziwy cykl instalowania dostępnych aktualizacji. W menu **Dziennik** możesz odczytać historię usługi.
 
 Wymagania środowiska: **Bazzite KDE Plasma 6, x86_64**, dostęp do Internetu i polecenia `curl`, `systemctl`, `kpackagetool6` oraz `bsdtar` przy aktualizacji dodatków. Jeżeli brakuje `bsdtar`, program spróbuje zainstalować `libarchive` przez działający Homebrew i podlinkować binarkę do `~/.local/bin/bsdtar`. KDE `kpackagetool6` musi pochodzić z systemu.
 
@@ -80,6 +87,8 @@ Przy pierwszym uruchomieniu istniejąca konfiguracja wykluczeń jest pokazywana 
 `Persistent=true` pozwala nadrobić pominięte uruchomienie po kolejnym zalogowaniu, a `RandomizedDelaySec=20min` rozprasza czas aktualizacji. **Nie jest to proces działający bez przerwy**: systemd uruchamia agenta na czas aktualizacji. Jeśli użytkownik nie ma włączonego `linger`, menedżer `systemd --user` nie będzie pracował przez całą noc po jego wylogowaniu; zaległy cykl zostanie wykonany po ponownym logowaniu.
 
 Automatyzacja pracuje w sesji użytkownika, **nie uruchamia się stale jako usługa systemowa root**. Przy domyślnych ustawieniach nie restartuje Plasma; zaktualizowane efekty i motywy mogą wymagać ponownego zalogowania, aby zobaczyć zmiany.
+
+Powiadomienia są wysyłane tylko, jeśli system ma dostępne `notify-send` oraz działającą sesję powiadomień użytkownika. Ich brak nie wpływa na wykonanie aktualizacji. Domyślnie powiadomienia dotyczą błędów; potwierdzenia udanych cykli można włączyć w GUI.
 
 Sprawdzenie stanu:
 
@@ -129,7 +138,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.4.0` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.5.0` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

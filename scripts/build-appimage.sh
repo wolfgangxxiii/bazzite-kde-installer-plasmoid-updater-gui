@@ -36,12 +36,18 @@ rsvg-convert --width 256 --height 256 \
   --output "$ICON_PNG" "assets/$ICON_NAME.svg"
 
 LINUXDEPLOY="$PROJECT_ROOT/.build-tools/linuxdeploy-x86_64.AppImage"
+LINUXDEPLOY_URL="https://github.com/linuxdeploy/linuxdeploy/releases/download/1-alpha-20251107-1/linuxdeploy-x86_64.AppImage"
+LINUXDEPLOY_SHA256="c20cd71e3a4e3b80c3483cef793cda3f4e990aca14014d23c544ca3ce1270b4d"
 if [[ ! -f "$LINUXDEPLOY" ]]; then
   curl --fail --location --silent --show-error --retry 3 \
-    "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+    "$LINUXDEPLOY_URL" \
     --output "$LINUXDEPLOY"
   chmod +x "$LINUXDEPLOY"
 fi
+printf '%s  %s\n' "$LINUXDEPLOY_SHA256" "$LINUXDEPLOY" | sha256sum --check --status || {
+  echo "linuxdeploy SHA-256 mismatch; packaging aborted." >&2
+  exit 1
+}
 
 export APPIMAGE_EXTRACT_AND_RUN=1
 "$LINUXDEPLOY" --appdir "$APPDIR" \
@@ -53,6 +59,8 @@ export APPIMAGE_EXTRACT_AND_RUN=1
 test -x "$APPDIR/usr/bin/plasmoid-updater-agent"
 
 mkdir -p "$APPDIR/usr/share/glib-2.0/schemas" "$APPDIR/apprun-hooks"
+install -Dm644 "packaging/$ICON_NAME.metainfo.xml" \
+  "$APPDIR/usr/share/metainfo/$ICON_NAME.metainfo.xml"
 cp /usr/share/glib-2.0/schemas/*.gschema.xml \
   "$APPDIR/usr/share/glib-2.0/schemas/"
 glib-compile-schemas "$APPDIR/usr/share/glib-2.0/schemas"

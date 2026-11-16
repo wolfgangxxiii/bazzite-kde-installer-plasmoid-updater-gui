@@ -2,14 +2,19 @@ use crate::settings::Settings;
 use anyhow::{anyhow, bail, Context, Result};
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
+use std::cell::RefCell;
 use std::collections::HashSet;
 use std::env;
 use std::fs::{self, File};
-use std::io::{Read, Write};
+use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::unix::fs::symlink;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::Duration;
 use toml_edit::{value, Array, DocumentMut};
 
 pub const UPSTREAM: &str = "https://github.com/uwuclxdy/plasmoid-updater";
@@ -19,6 +24,59 @@ const TIMER: &str = "plasmoid-updater.timer";
 const PREVIOUS_TIMER: &str = "bazzite-plasmoid-updater.timer";
 const AGENT: &str = "plasmoid-updater-agent";
 const MANAGED: &str = "# Managed by Bazzite Plasmoid Updater GUI";
+
+thread_local! {
+    static CANCEL_TOKEN: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
+}
+
+/// Only the GUI worker sets a token. The standalone systemd agent remains unattended.
+pub fn with_cancel<R>(token: Arc<AtomicBool>, work: impl FnOnce() -> R) -> R {
+    struct RestoreToken(Option<Arc<AtomicBool>>);
+    impl Drop for RestoreToken {
+        fn drop(&mut self) {
+            CANCEL_TOKEN.with(|current| *current.borrow_mut() = self.0.take());
+        }
+    }
+    let previous = CANCEL_TOKEN.with(|current| current.borrow_mut().replace(token));
+    let _restore = RestoreToken(previous);
+    work()
+}
+
+fn capture(command: &mut Command) -> Result<Output> {
+    let token = CANCEL_TOKEN.with(|current| current.borrow().clone());
+    let Some(token) = token else {
+        return command.output().context("Nie można uruchomić polecenia");
+    };
+    anyhow::ensure!(!token.load(Ordering::Relaxed), "Anulowano operację");
+    // Files avoid pipe deadlocks when the updater writes more than a pipe buffer.
+    let mut stdout = tempfile::tempfile()?;
+    let mut stderr = tempfile::tempfile()?;
+    command.stdout(Stdio::from(stdout.try_clone()?));
+    command.stderr(Stdio::from(stderr.try_clone()?));
+    let mut child = command.spawn().context("Nie można uruchomić polecenia")?;
+    let status = loop {
+        if token.load(Ordering::Relaxed) {
+            let _ = child.kill();
+            let _ = child.wait();
+            bail!("Anulowano operację na żądanie użytkownika");
+        }
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    let mut out = Vec::new();
+    let mut err = Vec::new();
+    stdout.seek(SeekFrom::Start(0))?;
+    stderr.seek(SeekFrom::Start(0))?;
+    stdout.read_to_end(&mut out)?;
+    stderr.read_to_end(&mut err)?;
+    Ok(Output {
+        status,
+        stdout: out,
+        stderr: err,
+    })
+}
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct InstalledAddon {
@@ -39,7 +97,15 @@ pub struct AvailableAddonUpdate {
 #[derive(Debug)]
 pub struct UpdateOverview {
     pub available: Vec<AvailableAddonUpdate>,
-    pub diagnostics: usize,
+    pub issues: Vec<AddonIssue>,
+    pub skipped: usize,
+    pub unmatched: usize,
+}
+
+#[derive(Debug)]
+pub struct AddonIssue {
+    pub name: String,
+    pub reason: String,
 }
 
 #[derive(Deserialize)]
@@ -52,6 +118,12 @@ struct UpdateResponse {
     available_updates: Vec<AvailableAddonUpdate>,
     #[serde(default)]
     diagnostics: Vec<serde_json::Value>,
+    #[serde(default)]
+    unavailable: Vec<serde_json::Value>,
+    #[serde(default)]
+    skipped: Vec<serde_json::Value>,
+    #[serde(default)]
+    unmatched: Vec<serde_json::Value>,
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -169,6 +241,22 @@ fn agent_binary(home: &Path) -> PathBuf {
     home.join(".local/bin").join(AGENT)
 }
 
+fn agent_version(home: &Path) -> Option<String> {
+    let path = agent_binary(home);
+    if !executable(&path) {
+        return None;
+    }
+    let output = Command::new(&path).arg("--version").output().ok()?;
+    if !output.status.success() {
+        return None;
+    }
+    String::from_utf8(output.stdout)
+        .ok()?
+        .trim()
+        .strip_prefix("plasmoid-updater-agent ")
+        .map(str::to_owned)
+}
+
 fn user_path(home: &Path) -> String {
     format!(
         "{}:/home/linuxbrew/.linuxbrew/opt/libarchive/bin:/home/linuxbrew/.linuxbrew/bin:{}",
@@ -257,7 +345,7 @@ fn install_missing_requirements(home: &Path, log: &mut dyn FnMut(&str)) -> Resul
 }
 
 fn output(command: &mut Command) -> Result<Output> {
-    let result = command.output().context("Nie można uruchomić polecenia")?;
+    let result = capture(command)?;
     if !result.status.success() {
         let stderr = String::from_utf8_lossy(&result.stderr);
         let stdout = String::from_utf8_lossy(&result.stdout);
@@ -386,7 +474,11 @@ pub fn status() -> String {
         },
         binary_status,
         configuration,
-        if executable(&agent_binary(&home)) { "gotowy" } else { "brak" },
+        &match agent_version(&home) {
+            Some(version) if version == env!("CARGO_PKG_VERSION") => "gotowy".to_owned(),
+            Some(version) => format!("stara wersja ({version}) — zapisz konfigurację ponownie"),
+            None => "brak lub uszkodzony".to_owned(),
+        },
         if active { "aktywny" } else if enabled { "włączony, ale nieaktywny" } else { "wyłączony" },
         next,
         if legacy_timer_exists(&home) { "\n! Wykryto starszy harmonogram — wymaga migracji" } else { "" }
@@ -484,6 +576,14 @@ fn diagnose(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
             "instalator spróbuje użyć Homebrew"
         }
     ));
+    log(&format!(
+        "{} notify-send — opcjonalne powiadomienia KDE",
+        if on_path("notify-send").is_some() {
+            "✓"
+        } else {
+            "!"
+        }
+    ));
     if let Some((path, version)) = find_existing_updater(home) {
         log(&format!("✓ plasmoid-updater {version}: {}", path.display()));
     } else {
@@ -513,6 +613,10 @@ fn diagnose(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
 
 fn test_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str)) -> Result<()> {
     settings.validate()?;
+    anyhow::ensure!(
+        Settings::path(home).is_file() && Settings::load(home)? == *settings,
+        "Ustawienia formularza nie odpowiadają zapisanej konfiguracji. Najpierw kliknij «Zapisz i zastosuj»."
+    );
     let (path, version) = find_existing_updater(home)
         .context("Nie znaleziono sprawnego plasmoid-updater — użyj przycisku Instaluj")?;
     log(&format!(
@@ -545,13 +649,9 @@ fn test_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str
             executable(&agent_binary(home)),
             "Brakuje agenta w ~/.local/bin"
         );
-        let agent_test = Command::new(agent_binary(home))
-            .arg("--version")
-            .output()
-            .context("Nie można uruchomić agenta")?;
         anyhow::ensure!(
-            agent_test.status.success(),
-            "Agent nie uruchamia się poprawnie"
+            agent_version(home).as_deref() == Some(env!("CARGO_PKG_VERSION")),
+            "Wersja agenta nie odpowiada instalatorowi — zapisz konfigurację ponownie"
         );
         let service_path = home.join(".config/systemd/user").join(SERVICE);
         let timer_path = home.join(".config/systemd/user").join(TIMER);
@@ -600,7 +700,11 @@ fn test_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str
             log(&format!("Następne uruchomienie: {next}"));
         }
     } else {
-        log("Harmonogram jest wyłączony zgodnie z konfiguracją GUI.");
+        anyhow::ensure!(
+            !user_unit_state(TIMER, "is-enabled") && !user_unit_state(TIMER, "is-active"),
+            "Timer nadal działa mimo wyłączonej automatyzacji. Kliknij «Zapisz i zastosuj»."
+        );
+        log("✓ Harmonogram jest rzeczywiście wyłączony w systemd.");
     }
     log("✓ Test konfiguracji zakończony pomyślnie. Nie zainstalowano żadnych dodatków.");
     Ok(())
@@ -795,13 +899,14 @@ fn run_updater(home: &Path, args: &[&str], check: bool, log: &mut dyn FnMut(&str
     if args.first() == Some(&"update") && !bsdtar_exists(home) {
         bail!("Brakuje bsdtar. Zainstaluj: brew install libarchive");
     }
-    let result = Command::new(binary)
-        .arg("--skip-plasma-detection")
-        .args(args)
-        .env("PATH", user_path(home))
-        .stdin(Stdio::null())
-        .output()
-        .context("Nie udało się uruchomić plasmoid-updater")?;
+    let result = capture(
+        Command::new(binary)
+            .arg("--skip-plasma-detection")
+            .args(args)
+            .env("PATH", user_path(home))
+            .stdin(Stdio::null()),
+    )
+    .context("Nie udało się uruchomić plasmoid-updater")?;
     let stdout = String::from_utf8_lossy(&result.stdout);
     let stderr = String::from_utf8_lossy(&result.stderr);
     if !stdout.trim().is_empty() {
@@ -824,13 +929,14 @@ fn updater_json(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<Ve
     let binary = find_existing_updater(home)
         .map(|(path, _)| path)
         .context("Najpierw zainstaluj plasmoid-updater")?;
-    let result = Command::new(binary)
-        .arg("--skip-plasma-detection")
-        .args(args)
-        .env("PATH", user_path(home))
-        .stdin(Stdio::null())
-        .output()
-        .context("Nie udało się uruchomić plasmoid-updater")?;
+    let result = capture(
+        Command::new(binary)
+            .arg("--skip-plasma-detection")
+            .args(args)
+            .env("PATH", user_path(home))
+            .stdin(Stdio::null()),
+    )
+    .context("Nie udało się uruchomić plasmoid-updater")?;
     if !result.status.success()
         && !result
             .status
@@ -867,9 +973,28 @@ pub fn available_addon_updates() -> Result<UpdateOverview> {
     let raw = updater_json(&home, &["check", "--json"], &[1, 100])?;
     let result: UpdateResponse =
         serde_json::from_slice(&raw).context("Niepoprawna lista aktualizacji w JSON")?;
+    let issues = result
+        .diagnostics
+        .into_iter()
+        .chain(result.unavailable)
+        .map(|item| AddonIssue {
+            name: item
+                .get("name")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Nieznany dodatek")
+                .to_owned(),
+            reason: item
+                .get("reason")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Nie udało się sprawdzić dodatku")
+                .to_owned(),
+        })
+        .collect();
     Ok(UpdateOverview {
         available: result.available_updates,
-        diagnostics: result.diagnostics.len(),
+        issues,
+        skipped: result.skipped.len(),
+        unmatched: result.unmatched.len(),
     })
 }
 
@@ -929,6 +1054,54 @@ fn guarded_write_or_takeover(path: &Path, content: &str, takeover: bool) -> Resu
 struct UnitSnapshot {
     path: PathBuf,
     previous: Option<Vec<u8>>,
+}
+
+struct FileSnapshot {
+    path: PathBuf,
+    previous: Option<(Vec<u8>, u32)>,
+}
+
+fn snapshot_files(paths: &[&Path]) -> Result<Vec<FileSnapshot>> {
+    paths
+        .iter()
+        .map(|path| {
+            let previous = if fs::symlink_metadata(path).is_ok() {
+                let data = fs::read(path)
+                    .with_context(|| format!("Nie można odczytać {}", path.display()))?;
+                let mode = fs::metadata(path)?.permissions().mode();
+                Some((data, mode))
+            } else {
+                None
+            };
+            Ok(FileSnapshot {
+                path: path.to_path_buf(),
+                previous,
+            })
+        })
+        .collect()
+}
+
+fn restore_files(snapshots: &[FileSnapshot], log: &mut dyn FnMut(&str)) {
+    for snapshot in snapshots {
+        let result: Result<()> = (|| match &snapshot.previous {
+            Some((data, mode)) => {
+                atomic_write(&snapshot.path, data)?;
+                fs::set_permissions(&snapshot.path, fs::Permissions::from_mode(*mode))?;
+                Ok(())
+            }
+            None if snapshot.path.exists() => {
+                fs::remove_file(&snapshot.path)?;
+                Ok(())
+            }
+            None => Ok(()),
+        })();
+        if let Err(error) = result {
+            log(&format!(
+                "Nie udało się przywrócić {}: {error:#}",
+                snapshot.path.display()
+            ));
+        }
+    }
 }
 
 fn snapshot_units(units: &Path) -> Result<Vec<UnitSnapshot>> {
@@ -1061,6 +1234,7 @@ fn save_configuration(
     let service_path = units.join(SERVICE);
     let timer_path = units.join(TIMER);
     let snapshots = snapshot_units(&units)?;
+    let saved_files = snapshot_files(&[&config_path, &Settings::path(home), &agent_binary(home)])?;
     let service = format!(
         "{MANAGED}\n[Unit]\nDescription=Update plasmoid-updater and user KDE Store addons\n\n[Service]\nType=oneshot\nEnvironment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/opt/libarchive/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin\nExecStart=%h/.local/bin/{AGENT} run\nNice=10\nIOSchedulingClass=idle\n"
     );
@@ -1069,19 +1243,18 @@ fn save_configuration(
         timer_schedule(settings.frequency_hours)?
     );
 
-    if settings.automatic {
-        install_agent(home, log)?;
-    }
-
-    if takeover {
-        backup_unmanaged_units(home, &snapshots, log)?;
-    }
     let old_target_enabled = user_unit_state(TIMER, "is-enabled");
     let old_target_active = user_unit_state(TIMER, "is-active");
     let old_previous_enabled = user_unit_state(PREVIOUS_TIMER, "is-enabled");
     let old_previous_active = user_unit_state(PREVIOUS_TIMER, "is-active");
 
     let apply = (|| -> Result<()> {
+        if settings.automatic {
+            install_agent(home, log)?;
+        }
+        if takeover {
+            backup_unmanaged_units(home, &snapshots, log)?;
+        }
         if takeover && (old_target_enabled || old_target_active) {
             log("Wyłączanie starszego plasmoid-updater.timer przed przejęciem jego nazwy…");
             output(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
@@ -1109,8 +1282,9 @@ fn save_configuration(
     })();
 
     if let Err(error) = apply {
-        log("Konfiguracja nie powiodła się. Przywracanie poprzednich jednostek systemd…");
+        log("Konfiguracja nie powiodła się. Przywracanie jednostek, ustawień i agenta…");
         restore_units(&snapshots, log);
+        restore_files(&saved_files, log);
         let _ = output(Command::new("systemctl").args(["--user", "daemon-reload"]));
         if old_target_enabled || old_target_active {
             let _ = output(Command::new("systemctl").args(["--user", "enable", "--now", TIMER]));
@@ -1224,11 +1398,55 @@ mod tests {
                     "latest_version": "2.1.0"
                 }
             ],
-            "diagnostics": []
+            "diagnostics": [{"name": "Broken Widget", "reason": "store lookup failed"}],
+            "unavailable": [{"name": "Old Theme", "reason": "no archive available"}],
+            "skipped": ["ignored"],
+            "unmatched": ["unknown"]
         }"#;
         let parsed: UpdateResponse = serde_json::from_str(json).unwrap();
         assert_eq!(parsed.available_updates.len(), 1);
         assert_eq!(parsed.available_updates[0].latest_version, "2.1.0");
+        assert_eq!(parsed.diagnostics[0]["reason"], "store lookup failed");
+        assert_eq!(parsed.unavailable.len(), 1);
+        assert_eq!(parsed.skipped.len(), 1);
+        assert_eq!(parsed.unmatched.len(), 1);
+    }
+
+    #[test]
+    fn restores_settings_and_agent_after_failed_configuration() {
+        let temp = tempfile::tempdir().unwrap();
+        let existing = temp.path().join("settings.toml");
+        let created = temp.path().join("agent");
+        fs::write(&existing, "automatic = false\n").unwrap();
+        fs::set_permissions(&existing, fs::Permissions::from_mode(0o600)).unwrap();
+        let snapshot = snapshot_files(&[&existing, &created]).unwrap();
+        fs::write(&existing, "automatic = true\n").unwrap();
+        fs::write(&created, "new binary").unwrap();
+        restore_files(&snapshot, &mut |_| {});
+        assert_eq!(
+            fs::read_to_string(&existing).unwrap(),
+            "automatic = false\n"
+        );
+        assert_eq!(
+            fs::metadata(&existing).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        assert!(!created.exists());
+    }
+
+    #[test]
+    fn can_cancel_a_read_only_subprocess() {
+        let token = Arc::new(AtomicBool::new(false));
+        let canceller = token.clone();
+        let thread = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(150));
+            canceller.store(true, Ordering::Relaxed);
+        });
+        let start = std::time::Instant::now();
+        let result = with_cancel(token, || capture(Command::new("sleep").arg("5")));
+        thread.join().unwrap();
+        assert!(format!("{:#}", result.unwrap_err()).contains("Anulowano"));
+        assert!(start.elapsed() < Duration::from_secs(3));
     }
 
     #[test]
@@ -1251,6 +1469,16 @@ mod tests {
         assert_eq!(binary, location);
         assert_eq!(version, "0.2.1");
         assert!(!updater_binary(temp.path()).exists());
+    }
+
+    #[test]
+    fn detects_agent_version_from_its_binary() {
+        let temp = tempfile::tempdir().unwrap();
+        let agent = agent_binary(temp.path());
+        fs::create_dir_all(agent.parent().unwrap()).unwrap();
+        fs::write(&agent, "#!/bin/sh\necho 'plasmoid-updater-agent 0.4.0'\n").unwrap();
+        fs::set_permissions(&agent, fs::Permissions::from_mode(0o755)).unwrap();
+        assert_eq!(agent_version(temp.path()).as_deref(), Some("0.4.0"));
     }
 
     #[test]

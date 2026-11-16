@@ -4,7 +4,9 @@ use adw::prelude::*;
 use gtk::glib;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, TryRecvError};
+use std::sync::Arc;
 use std::time::Duration;
 
 #[derive(Clone, Copy, Debug)]
@@ -14,9 +16,20 @@ enum Task {
     AvailableUpdates,
 }
 
+impl Task {
+    fn cancellable(self) -> bool {
+        matches!(
+            self,
+            Self::Inventory
+                | Self::AvailableUpdates
+                | Self::Operation(Job::Check | Job::DryRun | Job::Diagnose | Job::Journal)
+        )
+    }
+}
+
 enum Message {
     Progress(String),
-    Inventory(Vec<InstalledAddon>),
+    Inventory(Vec<InstalledAddon>, bool),
     AvailableUpdates(UpdateOverview),
     Done(Result<(), String>),
 }
@@ -27,9 +40,16 @@ struct UiParts {
     automation: gtk::Label,
     output: gtk::TextBuffer,
     toast: adw::ToastOverlay,
+    activity: gtk::Label,
+    spinner: gtk::Spinner,
+    cancel_button: gtk::Button,
+    cancel_token: Rc<RefCell<Option<Arc<AtomicBool>>>>,
+    dirty: Rc<Cell<bool>>,
+    unsaved: gtk::Label,
     buttons: Rc<Vec<gtk::Button>>,
     busy: Rc<Cell<bool>>,
     inventory: Rc<RefCell<Vec<InstalledAddon>>>,
+    partial_system: Rc<Cell<bool>>,
     updates: Rc<RefCell<Vec<AvailableAddonUpdate>>>,
     inventory_list: gtk::ListBox,
     updates_list: gtk::ListBox,
@@ -92,10 +112,15 @@ fn render_inventory(parts: &UiParts) {
     let user_count = inventory.iter().filter(|addon| !addon.is_system).count();
     let system_count = inventory.len() - user_count;
     parts.inventory_count.set_text(&format!(
-        "Znaleziono: {} użytkownika · {} systemowych · {} widocznych",
+        "Znaleziono: {} użytkownika · {} systemowych · {} widocznych{}",
         user_count,
         system_count,
-        visible.len()
+        visible.len(),
+        if parts.partial_system.get() {
+            " · UWAGA: skan systemowych nie powiódł się"
+        } else {
+            ""
+        }
     ));
     for addon in visible {
         let update = updates
@@ -131,9 +156,11 @@ fn render_inventory(parts: &UiParts) {
 fn render_updates(parts: &UiParts, overview: UpdateOverview) {
     clear_list(&parts.updates_list);
     parts.updates_count.set_text(&format!(
-        "{} aktualizacji · {} komunikatów diagnostycznych",
+        "{} aktualizacji · {} problemów · {} pominiętych · {} bez dopasowania",
         overview.available.len(),
-        overview.diagnostics
+        overview.issues.len(),
+        overview.skipped,
+        overview.unmatched,
     ));
     let mut updates = overview.available;
     updates.sort_by_key(|item| item.installed.name.to_lowercase());
@@ -149,6 +176,16 @@ fn render_updates(parts: &UiParts, overview: UpdateOverview) {
             .build();
         parts.updates_list.append(&row);
     }
+    for issue in overview.issues {
+        let row = adw::ActionRow::builder()
+            .title(issue.name)
+            .subtitle(issue.reason)
+            .build();
+        row.add_css_class("error");
+        let warning = gtk::Image::from_icon_name("dialog-warning-symbolic");
+        row.add_prefix(&warning);
+        parts.updates_list.append(&row);
+    }
     *parts.updates.borrow_mut() = updates;
     render_inventory(parts);
 }
@@ -160,53 +197,68 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
     for button in parts.buttons.iter() {
         button.set_sensitive(false);
     }
+    parts.activity.set_text("Trwa operacja…");
+    parts.spinner.start();
+    parts.cancel_button.set_sensitive(task.cancellable());
+    let cancel = Arc::new(AtomicBool::new(false));
+    *parts.cancel_token.borrow_mut() = Some(cancel.clone());
     append_log(&parts.output, &format!("▶ {task:?}"));
 
     let (sender, receiver) = mpsc::channel();
     std::thread::spawn(move || {
-        let result = (|| -> anyhow::Result<()> {
-            match task {
-                Task::Operation(job) => backend::execute(job, settings, &mut |line| {
-                    let _ = sender.send(Message::Progress(line.to_owned()));
-                }),
-                Task::Inventory => {
-                    let mut addons = backend::installed_addons(false)?;
-                    let _ = sender.send(Message::Progress(format!(
-                        "Znaleziono {} dodatków użytkownika.",
-                        addons.len()
-                    )));
-                    match backend::installed_addons(true) {
-                        Ok(system) => addons.extend(system),
-                        Err(error) => {
-                            let _ = sender.send(Message::Progress(format!(
-                                "Nie odczytano dodatków systemowych: {error:#}"
-                            )));
+        let result = backend::with_cancel(cancel, || {
+            (|| -> anyhow::Result<()> {
+                match task {
+                    Task::Operation(job) => backend::execute(job, settings, &mut |line| {
+                        let _ = sender.send(Message::Progress(line.to_owned()));
+                    }),
+                    Task::Inventory => {
+                        let mut addons = backend::installed_addons(false)?;
+                        let _ = sender.send(Message::Progress(format!(
+                            "Znaleziono {} dodatków użytkownika.",
+                            addons.len()
+                        )));
+                        let system = backend::installed_addons(true);
+                        let incomplete = system.is_err();
+                        if let Ok(extra) = system.as_ref() {
+                            addons.extend(extra.iter().cloned());
                         }
+                        let _ = sender.send(Message::Inventory(addons, incomplete));
+                        if let Err(error) = system {
+                            anyhow::bail!("Lista dodatków użytkownika jest dostępna, ale odczyt dodatków systemowych się nie powiódł: {error:#}");
+                        }
+                        Ok(())
                     }
-                    let _ = sender.send(Message::Inventory(addons));
-                    Ok(())
+                    Task::AvailableUpdates => {
+                        let _ = sender.send(Message::AvailableUpdates(
+                            backend::available_addon_updates()?,
+                        ));
+                        Ok(())
+                    }
                 }
-                Task::AvailableUpdates => {
-                    let _ = sender.send(Message::AvailableUpdates(
-                        backend::available_addon_updates()?,
-                    ));
-                    Ok(())
-                }
-            }
-        })();
+            })()
+        });
         let _ = sender.send(Message::Done(result.map_err(|error| format!("{error:#}"))));
     });
 
     glib::timeout_add_local(Duration::from_millis(120), move || {
         loop {
             match receiver.try_recv() {
-                Ok(Message::Progress(line)) => append_log(&parts.output, &line),
-                Ok(Message::Inventory(addons)) => {
+                Ok(Message::Progress(line)) => {
+                    append_log(&parts.output, &line);
+                    let preview = line.lines().last().unwrap_or(&line);
+                    parts
+                        .activity
+                        .set_text(&preview.chars().take(100).collect::<String>());
+                }
+                Ok(Message::Inventory(addons, incomplete)) => {
+                    parts.partial_system.set(incomplete);
                     *parts.inventory.borrow_mut() = addons;
                     render_inventory(&parts);
                 }
                 Ok(Message::AvailableUpdates(overview)) => render_updates(&parts, overview),
                 Ok(Message::Done(result)) => {
+                    let succeeded = result.is_ok();
                     match result {
                         Ok(()) => {
                             append_log(&parts.output, "✓ Operacja zakończona pomyślnie.");
@@ -215,21 +267,49 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                         Err(error) => {
                             append_log(&parts.output, &format!("✗ {error}"));
                             parts.toast.add_toast(adw::Toast::new(
-                                "Operacja nie powiodła się — sprawdź dziennik",
+                                if error.contains("Anulowano operację") {
+                                    "Anulowano operację"
+                                } else {
+                                    "Operacja nie powiodła się — sprawdź dziennik"
+                                },
                             ));
                         }
                     }
+                    parts.spinner.stop();
+                    parts.activity.set_text(if succeeded {
+                        "Gotowe"
+                    } else {
+                        "Sprawdź dziennik"
+                    });
+                    parts.cancel_button.set_sensitive(false);
+                    *parts.cancel_token.borrow_mut() = None;
                     parts.status.set_text(&backend::status());
                     parts.automation.set_text(&backend::automation_report());
                     for button in parts.buttons.iter() {
                         button.set_sensitive(true);
                     }
                     parts.busy.set(false);
+                    if succeeded && matches!(task, Task::Operation(Job::Save { .. })) {
+                        parts.dirty.set(false);
+                        parts.unsaved.set_visible(false);
+                    }
+                    if matches!(task, Task::Operation(Job::Update | Job::RunService)) {
+                        parts.updates.borrow_mut().clear();
+                        clear_list(&parts.updates_list);
+                        parts
+                            .updates_count
+                            .set_text("Po aktualizacji sprawdź dostępne wersje ponownie.");
+                        launch(parts.clone(), Task::Inventory, Settings::default());
+                    }
                     return glib::ControlFlow::Break;
                 }
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => {
                     append_log(&parts.output, "Przerwano zadanie bez wyniku.");
+                    parts.spinner.stop();
+                    parts.activity.set_text("Przerwano zadanie");
+                    parts.cancel_button.set_sensitive(false);
+                    *parts.cancel_token.borrow_mut() = None;
                     for button in parts.buttons.iter() {
                         button.set_sensitive(true);
                     }
@@ -309,6 +389,19 @@ pub fn build(app: &adw::Application) {
     let refresh = gtk::Button::from_icon_name("view-refresh-symbolic");
     refresh.set_tooltip_text(Some("Odśwież stan instalacji"));
     header.pack_end(&refresh);
+    let cancel_button = gtk::Button::with_label("Anuluj");
+    cancel_button.set_tooltip_text(Some(
+        "Anuluje tylko bezpieczne zadania odczytu i diagnostyki",
+    ));
+    cancel_button.set_sensitive(false);
+    header.pack_end(&cancel_button);
+    let spinner = gtk::Spinner::new();
+    header.pack_end(&spinner);
+    let activity = gtk::Label::new(Some("Gotowe"));
+    activity.add_css_class("dim-label");
+    activity.set_max_width_chars(44);
+    activity.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    header.pack_end(&activity);
 
     let stack = gtk::Stack::new();
     stack.set_hexpand(true);
@@ -496,6 +589,19 @@ pub fn build(app: &adw::Application) {
         .build();
     settings_group.add(&restart);
 
+    let notify_success = adw::SwitchRow::builder()
+        .title("Powiadamiaj po zakończonym cyklu")
+        .subtitle("Wymaga dostępnego notify-send i sesji powiadomień KDE")
+        .active(initial.notify_on_success)
+        .build();
+    settings_group.add(&notify_success);
+    let notify_error = adw::SwitchRow::builder()
+        .title("Powiadamiaj o błędach aktualizacji")
+        .subtitle("Domyślnie włączone; brak usługi powiadomień nie zatrzymuje aktualizacji")
+        .active(initial.notify_on_error)
+        .build();
+    settings_group.add(&notify_error);
+
     let migrate_legacy = adw::SwitchRow::builder()
         .title("Przejmij istniejącą usługę i harmonogram plasmoid-updater")
         .subtitle("Zapisze kopie starych jednostek, wyłączy poprzedni timer i skonfiguruje nowy")
@@ -508,6 +614,14 @@ pub fn build(app: &adw::Application) {
         .text(initial.excluded_packages.join(", "))
         .build();
     settings_group.add(&exclusions);
+    let unsaved = gtk::Label::new(Some(
+        "Niezapisane zmiany — najpierw kliknij «Zapisz i zastosuj».",
+    ));
+    unsaved.add_css_class("warning");
+    unsaved.set_xalign(0.0);
+    unsaved.set_wrap(true);
+    unsaved.set_visible(false);
+    settings_group.add(&unsaved);
     let save_button = button("Zapisz i zastosuj", true);
     let save_row = adw::ActionRow::builder()
         .title("Zapisz ustawienia")
@@ -566,11 +680,43 @@ pub fn build(app: &adw::Application) {
     journal.append(&log_group);
     add_page(&stack, "journal", "Dziennik", &journal);
 
+    let dirty = Rc::new(Cell::new(false));
+    let mark_dirty: Rc<dyn Fn()> = {
+        let dirty = dirty.clone();
+        let unsaved = unsaved.clone();
+        Rc::new(move || {
+            dirty.set(true);
+            unsaved.set_visible(true);
+        })
+    };
+    let marker = mark_dirty.clone();
+    automatic.connect_active_notify(move |_| marker());
+    let marker = mark_dirty.clone();
+    auto_update_tool.connect_active_notify(move |_| marker());
+    let marker = mark_dirty.clone();
+    frequency.connect_selected_notify(move |_| marker());
+    let marker = mark_dirty.clone();
+    restart.connect_active_notify(move |_| marker());
+    let marker = mark_dirty.clone();
+    notify_success.connect_active_notify(move |_| marker());
+    let marker = mark_dirty.clone();
+    notify_error.connect_active_notify(move |_| marker());
+    let marker = mark_dirty.clone();
+    migrate_legacy.connect_active_notify(move |_| marker());
+    let marker = mark_dirty;
+    exclusions.connect_changed(move |_| marker());
+
     let parts = UiParts {
         status,
         automation,
         output,
         toast: overlay,
+        activity,
+        spinner,
+        cancel_button: cancel_button.clone(),
+        cancel_token: Rc::new(RefCell::new(None)),
+        dirty,
+        unsaved,
         buttons: Rc::new(vec![
             diagnose_button.clone(),
             install_button.clone(),
@@ -586,6 +732,7 @@ pub fn build(app: &adw::Application) {
         ]),
         busy: Rc::new(Cell::new(false)),
         inventory: Rc::new(RefCell::new(Vec::new())),
+        partial_system: Rc::new(Cell::new(false)),
         updates: Rc::new(RefCell::new(Vec::new())),
         inventory_list,
         updates_list,
@@ -605,6 +752,14 @@ pub fn build(app: &adw::Application) {
     inventory_search.connect_search_changed(move |_| render_inventory(&search_parts));
     let scope_parts = parts.clone();
     inventory_scope.connect_selected_notify(move |_| render_inventory(&scope_parts));
+    let cancel_parts = parts.clone();
+    cancel_button.connect_clicked(move |_| {
+        if let Some(token) = cancel_parts.cancel_token.borrow().as_ref() {
+            token.store(true, Ordering::Relaxed);
+            cancel_parts.cancel_button.set_sensitive(false);
+            cancel_parts.activity.set_text("Anulowanie zadania…");
+        }
+    });
 
     let parts_diagnose = parts.clone();
     diagnose_button.connect_clicked(move |_| {
@@ -659,11 +814,19 @@ pub fn build(app: &adw::Application) {
             _ => 24,
         },
         restart_plasma: restart.is_active(),
+        notify_on_success: notify_success.is_active(),
+        notify_on_error: notify_error.is_active(),
         excluded_packages: Settings::parse_exclusions(exclusions.text().as_str()),
     });
     let parts_update = parts.clone();
     let read_update = read_form.clone();
     update_button.connect_clicked(move |_| {
+        if parts_update.dirty.get() {
+            parts_update.toast.add_toast(adw::Toast::new(
+                "Najpierw zapisz zmienione ustawienia automatyzacji i wykluczeń",
+            ));
+            return;
+        }
         launch(
             parts_update.clone(),
             Task::Operation(Job::Update),
@@ -677,6 +840,12 @@ pub fn build(app: &adw::Application) {
     });
     let parts_service = parts.clone();
     run_service_button.connect_clicked(move |_| {
+        if parts_service.dirty.get() {
+            parts_service.toast.add_toast(adw::Toast::new(
+                "Zapisz ustawienia przed uruchomieniem cyklu",
+            ));
+            return;
+        }
         launch(
             parts_service.clone(),
             Task::Operation(Job::RunService),

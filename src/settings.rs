@@ -3,13 +3,15 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
     pub automatic: bool,
     pub auto_update_tool: bool,
     pub frequency_hours: u8,
     pub restart_plasma: bool,
+    pub notify_on_success: bool,
+    pub notify_on_error: bool,
     pub excluded_packages: Vec<String>,
 }
 
@@ -20,6 +22,8 @@ impl Default for Settings {
             auto_update_tool: true,
             frequency_hours: 24,
             restart_plasma: false,
+            notify_on_success: false,
+            notify_on_error: true,
             excluded_packages: Vec::new(),
         }
     }
@@ -87,6 +91,8 @@ mod tests {
         assert!(settings.automatic);
         assert!(settings.auto_update_tool);
         assert!(!settings.restart_plasma);
+        assert!(!settings.notify_on_success);
+        assert!(settings.notify_on_error);
         assert_eq!(settings.frequency_hours, 24);
     }
 
@@ -95,5 +101,13 @@ mod tests {
         let mut settings = Settings::default();
         settings.frequency_hours = 5;
         assert!(settings.validate().is_err());
+    }
+
+    #[test]
+    fn older_settings_receive_safe_notification_defaults() {
+        let previous = "automatic = true\nauto_update_tool = true\nfrequency_hours = 24\nrestart_plasma = false\nexcluded_packages = []\n";
+        let loaded: Settings = toml::from_str(previous).unwrap();
+        assert!(!loaded.notify_on_success);
+        assert!(loaded.notify_on_error);
     }
 }

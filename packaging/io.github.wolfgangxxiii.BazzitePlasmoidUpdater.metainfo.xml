@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>io.github.wolfgangxxiii.BazzitePlasmoidUpdater</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-or-later</project_license>
+  <name>Bazzite Plasmoid Updater</name>
+  <summary>Install and configure automatic KDE Plasma addon updates on Bazzite</summary>
+  <description>
+    <p>A GTK4 and libadwaita graphical installer and configuration tool for plasmoid-updater.</p>
+    <p>Inspect KDE Store addons, check versions and configure unattended user systemd updates without changing the immutable Bazzite system image.</p>
+  </description>
+  <launchable type="desktop-id">io.github.wolfgangxxiii.BazzitePlasmoidUpdater.desktop</launchable>
+  <url type="homepage">https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui</url>
+  <provides>
+    <binary>bazzite-plasmoid-updater-gui</binary>
+  </provides>
+  <releases>
+    <release version="0.5.0" date="2026-11-16" />
+  </releases>
+</component>

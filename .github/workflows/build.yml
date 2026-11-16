@@ -34,7 +34,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.0'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.1'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -63,13 +63,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.0 >/dev/null 2>&1; then
-              echo "v0.5.0 already published; use a new version tag for another release."
+            if gh release view v0.5.1 >/dev/null 2>&1; then
+              echo "v0.5.1 already published; use a new version tag for another release."
             else
-              gh release create v0.5.0 dist/*.AppImage \
+              gh release create v0.5.1 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.0" \
-                --notes "Poprawki automatyzacji: wycofywanie zmian w ustawieniach po błędzie, test tylko zapisanej konfiguracji, sprawdzanie wersji agenta. Panel KDE: szczegółowa diagnostyka błędów, częściowe skanowanie i odświeżanie po aktualizacji. GUI: spinner, bezpieczne anulowanie skanowania i sprawdzania, informacja o niezapisanych zmianach. Opcjonalne powiadomienia KDE z agenta systemd. Przypięte narzędzie budowania AppImage i metadane AppStream."
+                --title "Bazzite Plasmoid Updater GUI v0.5.1" \
+                --notes "Odświeżony interfejs GTK4/libadwaita: adaptacyjna i zwijana nawigacja, osobne karty z działaniami, czytelniejszy pulpit oraz dolny pasek postępu. Ustawienia automatyzacji podzielone na grupy, a formularz blokowany podczas trwających operacji. Lepsze zawijanie tekstu, wyszukiwanie dodatków i komunikaty pustych list."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

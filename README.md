@@ -22,6 +22,8 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Sprawdza Bazzite, KDE, architekturę, `curl`, Homebrew, `bsdtar`, `kpackagetool6`, `systemctl --user`, istniejącą konfigurację i starsze harmonogramy.
 - Weryfikuje pobrany plik za pomocą **SHA-256** przed instalacją.
 - Oddziela funkcje na pięć ekranów w bocznym menu: **Pulpit**, **Instalacja**, **Dodatki Plasma**, **Automatyzacja** i **Dziennik**.
+- Ma **adaptacyjny interfejs**: na wąskim ekranie menu zwija się automatycznie, a przycisk w nagłówku pozwala je pokazać lub ukryć. Opisy i przyciski nie konkurują o miejsce w jednym wierszu.
+- Grupuje harmonogram, opcje powiadomień, migrację oraz testowanie w odrębnych sekcjach. Pokazuje instrukcję pierwszych kroków, puste stany list i pasek postępu na dole okna.
 - Pokazuje dodatki rozpoznawane przez `plasmoid-updater list-installed --json` zarówno dla użytkownika, jak i z systemu (`--system list-installed --json` — **tylko odczyt**). Pozwala wyszukiwać i filtrować listę.
 - Wyświetla wykryte dostępne aktualizacje dodatków z KDE Store wraz z wersjami, bez dokonywania zmian podczas sprawdzania.
 - Pokazuje przyczyny błędów sprawdzania i ostrzega, jeżeli skanowanie dodatków systemowych zakończyło się tylko częściowo.
@@ -41,6 +43,7 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Pozwala zdecydować, czy po automatycznej aktualizacji restartować Plasma (domyślnie **nie**).
 - Umożliwia opcjonalne powiadomienia KDE o błędach i udanych cyklach przez `notify-send` (powiadomienia o błędach włączone domyślnie).
 - Sygnalizuje niezapisane zmiany; test konfiguracji sprawdza rzeczywiście zapisane ustawienia i stan timera.
+- Podczas trwających operacji blokuje edycję formularza, aby ustawienia widoczne na ekranie pozostały zgodne z zapisywanymi.
 - Pokazuje aktywną operację i pozwala anulować zadania diagnostyczne oraz skanowanie. Anulowanie instalacji/aktualizacji jest celowo niedostępne, żeby nie pozostawić częściowo zmienionych dodatków.
 - Zapisuje dziennik działań i wyświetla błędy w interfejsie.
 - Pokazuje aktywność timera i następny zaplanowany termin; testuje całą konfigurację przez `--dry-run`.
@@ -138,7 +141,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.5.0` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.5.1` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

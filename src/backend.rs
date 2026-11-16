@@ -20,12 +20,47 @@ const PREVIOUS_TIMER: &str = "bazzite-plasmoid-updater.timer";
 const AGENT: &str = "plasmoid-updater-agent";
 const MANAGED: &str = "# Managed by Bazzite Plasmoid Updater GUI";
 
+#[derive(Debug, Clone, Deserialize)]
+pub struct InstalledAddon {
+    pub name: String,
+    pub directory_name: String,
+    pub version: String,
+    pub component_type: String,
+    pub path: String,
+    pub is_system: bool,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct AvailableAddonUpdate {
+    pub installed: InstalledAddon,
+    pub latest_version: String,
+}
+
+#[derive(Debug)]
+pub struct UpdateOverview {
+    pub available: Vec<AvailableAddonUpdate>,
+    pub diagnostics: usize,
+}
+
+#[derive(Deserialize)]
+struct InstalledResponse {
+    components: Vec<InstalledAddon>,
+}
+
+#[derive(Deserialize)]
+struct UpdateResponse {
+    available_updates: Vec<AvailableAddonUpdate>,
+    #[serde(default)]
+    diagnostics: Vec<serde_json::Value>,
+}
+
 #[derive(Clone, Copy, Debug)]
 pub enum Job {
     Install,
     Diagnose,
     Test,
     RunService,
+    Journal,
     Check,
     DryRun,
     Update,
@@ -283,6 +318,30 @@ fn unit_property(unit: &str, property: &str) -> Option<String> {
     (!value.is_empty() && value != "n/a" && value != "0").then_some(value)
 }
 
+pub fn automation_report() -> String {
+    let Ok(home) = home() else {
+        return "Brak dostępu do katalogu użytkownika".into();
+    };
+    if !is_managed_unit(&user_units(&home).join(TIMER)) {
+        return "Automatyzacja nie została jeszcze skonfigurowana przez instalator.".into();
+    }
+    let enabled = user_unit_state(TIMER, "is-enabled");
+    let active = user_unit_state(TIMER, "is-active");
+    let next =
+        unit_property(TIMER, "NextElapseUSecRealtime").unwrap_or_else(|| "brak terminu".into());
+    let last =
+        unit_property(TIMER, "LastTriggerUSec").unwrap_or_else(|| "jeszcze nie uruchomiono".into());
+    let result = if last == "jeszcze nie uruchomiono" {
+        "brak poprzedniego cyklu".into()
+    } else {
+        unit_property(SERVICE, "Result").unwrap_or_else(|| "nieznany".into())
+    };
+    format!(
+        "Timer: {}\nNastępna aktualizacja: {next}\nOstatnie uruchomienie: {last}\nWynik ostatniej usługi: {result}",
+        if active { "aktywny" } else if enabled { "włączony, nieaktywny" } else { "wyłączony" }
+    )
+}
+
 pub fn status() -> String {
     let Ok(home) = home() else {
         return "Nie można ustalić katalogu domowego".to_owned();
@@ -355,6 +414,18 @@ pub fn execute(job: Job, settings: Settings, log: &mut dyn FnMut(&str)) -> Resul
             log("Uruchamianie cyklu aktualizacji przez systemd --user…");
             output(Command::new("systemctl").args(["--user", "start", SERVICE]))?;
             log("Usługa zakończyła się sukcesem. Wynik jest dostępny w journalctl --user.");
+            Ok(())
+        }
+        Job::Journal => {
+            let result = output(Command::new("journalctl").args([
+                "--user",
+                "-u",
+                SERVICE,
+                "-n",
+                "100",
+                "--no-pager",
+            ]))?;
+            log(String::from_utf8_lossy(&result.stdout).trim());
             Ok(())
         }
         Job::Check => run_updater(&home, &["check"], true, log),
@@ -749,6 +820,59 @@ fn run_updater(home: &Path, args: &[&str], check: bool, log: &mut dyn FnMut(&str
     }
 }
 
+fn updater_json(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<Vec<u8>> {
+    let binary = find_existing_updater(home)
+        .map(|(path, _)| path)
+        .context("Najpierw zainstaluj plasmoid-updater")?;
+    let result = Command::new(binary)
+        .arg("--skip-plasma-detection")
+        .args(args)
+        .env("PATH", user_path(home))
+        .stdin(Stdio::null())
+        .output()
+        .context("Nie udało się uruchomić plasmoid-updater")?;
+    if !result.status.success()
+        && !result
+            .status
+            .code()
+            .is_some_and(|code| accepted_codes.contains(&code))
+    {
+        bail!(
+            "plasmoid-updater zakończył działanie kodem {}: {}",
+            result.status,
+            String::from_utf8_lossy(&result.stderr).trim()
+        );
+    }
+    Ok(result.stdout)
+}
+
+pub fn installed_addons(system: bool) -> Result<Vec<InstalledAddon>> {
+    let home = home()?;
+    let args: &[&str] = if system {
+        &["--system", "list-installed", "--json"]
+    } else {
+        &["list-installed", "--json"]
+    };
+    let raw = updater_json(&home, args, &[])?;
+    let mut result: InstalledResponse = serde_json::from_slice(&raw)
+        .context("Niepoprawna lista zainstalowanych dodatków w JSON")?;
+    result
+        .components
+        .sort_by_key(|addon| addon.name.to_lowercase());
+    Ok(result.components)
+}
+
+pub fn available_addon_updates() -> Result<UpdateOverview> {
+    let home = home()?;
+    let raw = updater_json(&home, &["check", "--json"], &[1, 100])?;
+    let result: UpdateResponse =
+        serde_json::from_slice(&raw).context("Niepoprawna lista aktualizacji w JSON")?;
+    Ok(UpdateOverview {
+        available: result.available_updates,
+        diagnostics: result.diagnostics.len(),
+    })
+}
+
 pub fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
     let parent = path.parent().context("Niepoprawna ścieżka")?;
     fs::create_dir_all(parent)?;
@@ -1054,6 +1178,57 @@ mod tests {
         assert!(timer_schedule(6).unwrap().contains("06"));
         assert!(timer_schedule(12).unwrap().contains("12"));
         assert!(timer_schedule(24).unwrap().contains("04"));
+    }
+
+    #[test]
+    fn decodes_user_and_system_addon_inventory() {
+        let json = r#"{
+            "components": [
+                {
+                    "name": "Weather Report",
+                    "directory_name": "org.kde.weather",
+                    "version": "2.0.0",
+                    "component_type": "plasmoid",
+                    "path": "/home/user/.local/share/plasma/plasmoids/org.kde.weather",
+                    "is_system": false
+                },
+                {
+                    "name": "Breeze Dark",
+                    "directory_name": "breeze-dark",
+                    "version": "0.0.0",
+                    "component_type": "plasma_style",
+                    "path": "/usr/share/plasma/desktoptheme/breeze-dark",
+                    "is_system": true
+                }
+            ]
+        }"#;
+        let parsed: InstalledResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.components.len(), 2);
+        assert!(!parsed.components[0].is_system);
+        assert!(parsed.components[1].is_system);
+    }
+
+    #[test]
+    fn decodes_available_addon_updates() {
+        let json = r#"{
+            "available_updates": [
+                {
+                    "installed": {
+                        "name": "Weather Report",
+                        "directory_name": "org.kde.weather",
+                        "version": "2.0.0",
+                        "component_type": "plasmoid",
+                        "path": "/home/user/.local/share/plasma/plasmoids/org.kde.weather",
+                        "is_system": false
+                    },
+                    "latest_version": "2.1.0"
+                }
+            ],
+            "diagnostics": []
+        }"#;
+        let parsed: UpdateResponse = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.available_updates.len(), 1);
+        assert_eq!(parsed.available_updates[0].latest_version, "2.1.0");
     }
 
     #[test]

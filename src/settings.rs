@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 #[serde(default)]
 pub struct Settings {
     pub automatic: bool,
+    pub auto_update_tool: bool,
     pub frequency_hours: u8,
     pub restart_plasma: bool,
     pub excluded_packages: Vec<String>,
@@ -16,6 +17,7 @@ impl Default for Settings {
     fn default() -> Self {
         Self {
             automatic: true,
+            auto_update_tool: true,
             frequency_hours: 24,
             restart_plasma: false,
             excluded_packages: Vec::new(),
@@ -83,6 +85,7 @@ mod tests {
     fn defaults_are_unattended_but_do_not_restart_desktop() {
         let settings = Settings::default();
         assert!(settings.automatic);
+        assert!(settings.auto_update_tool);
         assert!(!settings.restart_plasma);
         assert_eq!(settings.frequency_hours, 24);
     }

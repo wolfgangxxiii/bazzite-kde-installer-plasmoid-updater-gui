@@ -21,7 +21,11 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Weryfikuje pobrany plik za pomocą **SHA-256** przed instalacją.
 - Instaluje narzędzie w `~/.local/bin` — bez `sudo` i bez zmiany obrazu Bazzite.
 - Sprawdza aktualizacje, pokazuje symulację (`--dry-run`) i wykonuje aktualizacje dodatków użytkownika.
-- Konfiguruje automatyczne aktualizacje co **6, 12 lub 24 godziny** przez timer `systemd --user`.
+- **Samoczynnie aktualizuje również `plasmoid-updater`:** w każdym cyklu sprawdza nowe wydanie na GitHub, porównuje wersję i pobiera binarkę tylko wtedy, gdy jest nowsza.
+- Konfiguruje automatyczne aktualizacje dodatków i narzędzia co **6, 12 lub 24 godziny** przez timer `systemd --user` — **bez konieczności uruchamiania GUI w tle**.
+- Instaluje lekki, niezależny agent aktualizacji uruchamiany przez systemd; działa nawet po zamknięciu AppImage.
+- Umożliwia oddzielne wyłączenie automatycznej aktualizacji samego `plasmoid-updater`.
+- Gdy brakuje `bsdtar`, próbuje zainstalować `libarchive` przez Homebrew (`brew install libarchive`).
 - Pozwala wykluczyć konkretne dodatki z aktualizacji.
 - Pozwala zdecydować, czy po automatycznej aktualizacji restartować Plasma (domyślnie **nie**).
 - Zapisuje dziennik działań i wyświetla błędy w interfejsie.
@@ -38,23 +42,27 @@ Program **nie** aktualizuje samego Bazzite, Flatpaków, sterowników ani pakiet�
    ./Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage
    ```
 
-3. W aplikacji kliknij **Zainstaluj / uaktualnij**.
+3. W aplikacji kliknij **Zainstaluj / uaktualnij** — instalator sprawdzi zależności i w razie potrzeby użyje Homebrew.
 4. Kliknij **Symuluj**, by zobaczyć potencjalne aktualizacje bez instalowania.
-5. Wybierz harmonogram i **Zapisz i zastosuj**.
+5. Włącz **Automatyczne aktualizacje w tle** i **Aktualizuj również plasmoid-updater** (oba przełączniki są domyślnie włączone).
+6. Wybierz harmonogram i kliknij **Zapisz i zastosuj**. Od tego momentu możesz zamknąć GUI.
 
-Wymagania środowiska: **Bazzite KDE Plasma 6, x86_64**, dostęp do Internetu i polecenia `curl`, `systemctl`, `kpackagetool6` oraz `bsdtar` przy aktualizacji dodatków. Jeżeli brakuje `bsdtar`, na Bazzite można użyć `brew install libarchive` (polecenie można udostępnić przez link do `~/.local/bin/bsdtar`).
+Wymagania środowiska: **Bazzite KDE Plasma 6, x86_64**, dostęp do Internetu i polecenia `curl`, `systemctl`, `kpackagetool6` oraz `bsdtar` przy aktualizacji dodatków. Jeżeli brakuje `bsdtar`, program spróbuje zainstalować `libarchive` przez działający Homebrew i podlinkować binarkę do `~/.local/bin/bsdtar`. KDE `kpackagetool6` musi pochodzić z systemu.
 
 ## Zasada działania
 
 | Element | Ścieżka / działanie |
 |---|---|
 | Binarka | `~/.local/bin/plasmoid-updater` |
+| Agent automatyzacji | `~/.local/bin/bazzite-plasmoid-updater-agent` |
 | Ustawienia upstream | `~/.config/plasmoid-updater.toml` |
 | Ustawienia GUI | `~/.config/bazzite-plasmoid-updater-gui/settings.toml` |
 | Usługa | `~/.config/systemd/user/bazzite-plasmoid-updater.service` |
 | Timer | `~/.config/systemd/user/bazzite-plasmoid-updater.timer` |
 
-Po zmianie ustawień program przeładowuje konfigurację `systemd --user` oraz odpowiednio włącza lub wyłącza timer. `Persistent=true` pozwala nadrobić pominięte uruchomienie po kolejnym zalogowaniu, a `RandomizedDelaySec=20min` rozprasza czas aktualizacji.
+Po zmianie ustawień program przeładowuje konfigurację `systemd --user` oraz odpowiednio włącza lub wyłącza timer. Każdy zaplanowany cykl uruchamia **samodzielnego agenta**. Najpierw sprawdza on wydanie `plasmoid-updater` na GitHub i ewentualnie weryfikuje SHA-256 oraz wymienia binarkę. Następnie wykonuje `plasmoid-updater --skip-plasma-detection update --yes --no-restart-plasma` dla dodatków użytkownika. Gdy GitHub jest chwilowo niedostępny, agent i tak próbuje zaktualizować dodatki z już zainstalowaną binarką.
+
+`Persistent=true` pozwala nadrobić pominięte uruchomienie po kolejnym zalogowaniu, a `RandomizedDelaySec=20min` rozprasza czas aktualizacji. **Nie jest to proces działający bez przerwy**: systemd uruchamia agenta na czas aktualizacji. Jeśli użytkownik nie ma włączonego `linger`, menedżer `systemd --user` nie będzie pracował przez całą noc po jego wylogowaniu; zaległy cykl zostanie wykonany po ponownym logowaniu.
 
 Automatyzacja pracuje w sesji użytkownika, **nie uruchamia się stale jako usługa systemowa root**. Przy domyślnych ustawieniach nie restartuje Plasma; zaktualizowane efekty i motywy mogą wymagać ponownego zalogowania, aby zobaczyć zmiany.
 
@@ -64,6 +72,7 @@ Sprawdzenie stanu:
 systemctl --user status bazzite-plasmoid-updater.timer
 systemctl --user list-timers --all
 journalctl --user -u bazzite-plasmoid-updater.service -n 50 --no-pager
+systemctl --user start bazzite-plasmoid-updater.service   # uruchom i przetestuj cały cykl teraz
 ```
 
 Zatrzymanie automatyzacji:
@@ -81,7 +90,7 @@ Wymagane: Rust (stable), nagłówki GTK4/libadwaita, `pkg-config`.
 Na Fedora/Bazzite środowisko programistyczne najlepiej zainstalować w Distrobox/Toolbx; kompilacja AppImage jest zautomatyzowana na Ubuntu 24.04 w GitHub Actions.
 
 ```bash
-cargo build --release
+cargo build --release --bins
 cargo test
 ```
 
@@ -95,7 +104,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-To pierwsza wersja (`0.1.0`). Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.2.0` dodaje automatyczną aktualizację samego programu `plasmoid-updater` i osobnego agenta systemd. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

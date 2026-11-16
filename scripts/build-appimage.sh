@@ -20,7 +20,7 @@ for tool in curl rsvg-convert glib-compile-schemas; do
   fi
 done
 
-cargo build --locked --release
+cargo build --locked --release --bins
 
 APPDIR="$PROJECT_ROOT/AppDir"
 DISTDIR="$PROJECT_ROOT/dist"
@@ -46,8 +46,11 @@ fi
 export APPIMAGE_EXTRACT_AND_RUN=1
 "$LINUXDEPLOY" --appdir "$APPDIR" \
   --executable "target/release/bazzite-plasmoid-updater-gui" \
+  --executable "target/release/bazzite-plasmoid-updater-agent" \
   --desktop-file "packaging/$ICON_NAME.desktop" \
   --icon-file "$ICON_PNG"
+
+test -x "$APPDIR/usr/bin/bazzite-plasmoid-updater-agent"
 
 mkdir -p "$APPDIR/usr/share/glib-2.0/schemas" "$APPDIR/apprun-hooks"
 cp /usr/share/glib-2.0/schemas/*.gschema.xml \

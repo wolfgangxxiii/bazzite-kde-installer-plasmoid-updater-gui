@@ -177,10 +177,10 @@ pub fn build(app: &adw::Application) {
         "Wyświetla plan bez instalacji",
         &dry_run_button,
     ));
-    let update_button = button("Aktualizuj teraz", false);
+    let update_button = button("Aktualizuj wszystko teraz", false);
     install_group.add(&action_row(
         "Ręczna aktualizacja",
-        "Aktualizuje dodatki użytkownika bez restartowania Plasma",
+        "Sprawdza GitHub (opcjonalnie), następnie aktualizuje dodatki KDE Store",
         &update_button,
     ));
     content.append(&install_group);
@@ -200,6 +200,13 @@ pub fn build(app: &adw::Application) {
         .active(initial.automatic)
         .build();
     settings_group.add(&automatic);
+
+    let auto_update_tool = adw::SwitchRow::builder()
+        .title("Aktualizuj również plasmoid-updater")
+        .subtitle("Każdy cykl sprawdza wydanie na GitHub i pobiera program tylko, gdy jest nowszy")
+        .active(initial.auto_update_tool)
+        .build();
+    settings_group.add(&auto_update_tool);
 
     let frequency = gtk::DropDown::from_strings(&["Co 6 godzin", "Co 12 godzin", "Raz dziennie"]);
     frequency.set_valign(gtk::Align::Center);
@@ -298,21 +305,23 @@ pub fn build(app: &adw::Application) {
     let parts_dry = parts.clone();
     dry_run_button
         .connect_clicked(move |_| launch(parts_dry.clone(), Job::DryRun, Settings::default()));
+    let read_form: Rc<dyn Fn() -> Settings> = Rc::new(move || Settings {
+        automatic: automatic.is_active(),
+        auto_update_tool: auto_update_tool.is_active(),
+        frequency_hours: match frequency.selected() {
+            0 => 6,
+            1 => 12,
+            _ => 24,
+        },
+        restart_plasma: restart.is_active(),
+        excluded_packages: Settings::parse_exclusions(exclusions.text().as_str()),
+    });
     let parts_update = parts.clone();
+    let read_update = read_form.clone();
     update_button
-        .connect_clicked(move |_| launch(parts_update.clone(), Job::Update, Settings::default()));
+        .connect_clicked(move |_| launch(parts_update.clone(), Job::Update, read_update()));
     save_button.connect_clicked(move |_| {
-        let settings = Settings {
-            automatic: automatic.is_active(),
-            frequency_hours: match frequency.selected() {
-                0 => 6,
-                1 => 12,
-                _ => 24,
-            },
-            restart_plasma: restart.is_active(),
-            excluded_packages: Settings::parse_exclusions(exclusions.text().as_str()),
-        };
-        launch(parts.clone(), Job::Save, settings);
+        launch(parts.clone(), Job::Save, read_form());
     });
     window.present();
 }

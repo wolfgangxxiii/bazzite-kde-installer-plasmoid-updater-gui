@@ -29,6 +29,10 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Run unit tests
         run: cargo test --locked
+      - name: Test standalone background agent
+        run: |
+          cargo build --locked --release --bins
+          ./target/release/bazzite-plasmoid-updater-agent --version | grep -F 'bazzite-plasmoid-updater-agent 0.2.0'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -55,15 +59,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
-            # Publish the initial stable download on the first successful build.
-            # Future pushes do not silently replace an already published v0.1.0.
-            if gh release view v0.1.0 >/dev/null 2>&1; then
-              echo "v0.1.0 already published; use a new version tag for another release."
+            # Publish a new stable download after the first successful build.
+            # Future pushes do not silently replace an already published release.
+            if gh release view v0.2.0 >/dev/null 2>&1; then
+              echo "v0.2.0 already published; use a new version tag for another release."
             else
-              gh release create v0.1.0 dist/*.AppImage \
+              gh release create v0.2.0 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.1.0" \
-                --notes "Pierwsze stabilne wydanie AppImage dla Bazzite KDE Plasma 6 (x86_64). Instalacja i weryfikacja plasmoid-updater, konfiguracja GUI i automatyzacja aktualizacji przez systemd --user."
+                --title "Bazzite Plasmoid Updater GUI v0.2.0" \
+                --notes "Automatyczne aktualizacje w tle przez samodzielnego agenta systemd --user: aktualizuje dodatki KDE Store oraz samą binarkę plasmoid-updater z GitHub (kontrola SHA-256). Harmonogram 6/12/24 h, przełącznik aktualizacji narzędzia oraz naprawa brakującego bsdtar przez Homebrew."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

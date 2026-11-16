@@ -11,7 +11,8 @@ trap 'kill "$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true' 
 
 window_id=""
 for attempt in $(seq 1 40); do
-  window_id="$(xdotool search --onlyvisible --name 'Plasmoid Updater' | head -n 1 || true)"
+  # The window title changes with PL/EN; both contain "Bazzite".
+  window_id="$(xdotool search --onlyvisible --name 'Bazzite' | head -n 1 || true)"
   if [[ -n "$window_id" ]]; then
     break
   fi

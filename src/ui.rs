@@ -709,6 +709,7 @@ fn action_row(title: &str, subtitle: &str, button: &gtk::Button) -> adw::Breakpo
     card.append(button);
 
     let adaptive = adw::BreakpointBin::new();
+    adaptive.set_size_request(1, 1);
     adaptive.set_child(Some(&card));
     let narrow = adw::Breakpoint::new(
         adw::BreakpointCondition::parse("max-width: 650px").expect("Valid action width breakpoint"),
@@ -1006,6 +1007,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     });
 
     let adaptive_layout = adw::BreakpointBin::new();
+    adaptive_layout.set_size_request(320, 320);
     adaptive_layout.set_child(Some(&split_view));
     let narrow = adw::Breakpoint::new(
         adw::BreakpointCondition::parse("max-width: 820px")

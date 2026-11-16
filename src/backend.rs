@@ -699,7 +699,7 @@ pub fn execute(job: Job, settings: Settings, log: &mut dyn FnMut(&str)) -> Resul
             Ok(())
         }
         Job::Check => run_updater(&home, &["check"], true, log),
-        Job::DryRun => run_updater(&home, &["update", "--dry-run"], false, log),
+        Job::DryRun => run_safe_dry_run(&home, log),
         Job::Update => run_update_cycle(&home, &settings, log),
         Job::Save { migrate_legacy } => save_configuration(&home, &settings, migrate_legacy, log),
     }
@@ -818,9 +818,8 @@ fn test_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str
     } else {
         bail!("Brak konfiguracji plasmoid-updater: {}", config.display());
     }
-    log("Test bez zmian w dodatkach: plasmoid-updater update --dry-run…");
-    run_updater(home, &["update", "--dry-run"], false, log)?;
-    log("✓ Tryb dry-run zadziałał poprawnie.");
+    run_safe_dry_run(home, log)?;
+    log("✓ Test odczytu aktualizacji zakończony bez zmian w dodatkach.");
 
     if settings.automatic {
         anyhow::ensure!(
@@ -1103,7 +1102,19 @@ fn run_updater(home: &Path, args: &[&str], check: bool, log: &mut dyn FnMut(&str
     }
 }
 
-fn updater_json(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<Vec<u8>> {
+fn run_safe_dry_run(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
+    let help = updater_output(home, &["update", "--help"], &[])?;
+    if String::from_utf8_lossy(&help).contains("--dry-run") {
+        log("Test bez zmian w dodatkach: plasmoid-updater update --dry-run…");
+        run_updater(home, &["update", "--dry-run"], false, log)
+    } else {
+        // Upstream v0.2.1 has no --dry-run, but `check` is read-only.
+        log("Starsza wersja plasmoid-updater: test bez zmian przez polecenie check…");
+        run_updater(home, &["check"], true, log)
+    }
+}
+
+fn updater_output(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<Vec<u8>> {
     let binary = find_existing_updater(home)
         .map(|(path, _)| path)
         .context("Najpierw zainstaluj plasmoid-updater")?;
@@ -1112,6 +1123,8 @@ fn updater_json(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<Ve
             .arg("--skip-plasma-detection")
             .args(args)
             .env("PATH", user_path(home))
+            .env("NO_COLOR", "1")
+            .env("CLICOLOR", "0")
             .stdin(Stdio::null()),
     )
     .context("Nie udało się uruchomić plasmoid-updater")?;
@@ -1130,25 +1143,160 @@ fn updater_json(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<Ve
     Ok(result.stdout)
 }
 
-pub fn installed_addons(system: bool) -> Result<Vec<InstalledAddon>> {
-    let home = home()?;
+// v0.2.1 is still the latest published upstream binary, but --json exists only
+// on newer, currently unreleased upstream code. Detect that exact CLI mismatch
+// and fall back to the human-readable tables; propagate all unrelated errors.
+fn unsupported_json_option(error: &anyhow::Error) -> bool {
+    let message = format!("{error:#}");
+    message.contains("exit status: 2")
+        && message.contains("unexpected argument '--json'")
+}
+
+const LEGACY_COMPONENT_TYPES: &[&str] = &[
+    "Aurorae Decoration",
+    "Wallpaper Plugin",
+    "Plasma Widget",
+    "KWin Switcher",
+    "KWin Effect",
+    "KWin Script",
+    "Global Theme",
+    "Plasma Style",
+    "Color Scheme",
+    "Splash Screen",
+    "SDDM Theme",
+    "Icon Theme",
+    "Wallpaper",
+];
+
+fn legacy_fields(line: &str) -> Option<(Vec<&str>, &str)> {
+    LEGACY_COMPONENT_TYPES.iter().find_map(|kind| {
+        let prefix = line.trim().strip_suffix(*kind)?;
+        if !prefix.chars().last().is_some_and(char::is_whitespace) {
+            return None;
+        }
+        Some((prefix.split_whitespace().collect(), *kind))
+    })
+}
+
+fn legacy_table_rows<'a>(text: &'a str, header: &[&str], empty: &str) -> Result<Vec<&'a str>> {
+    if text.trim().eq_ignore_ascii_case(empty) {
+        return Ok(Vec::new());
+    }
+    let mut lines = text.lines();
+    let found = lines
+        .by_ref()
+        .any(|line| line.split_whitespace().eq(header.iter().copied()));
+    anyhow::ensure!(found, "Nieznany format tabeli plasmoid-updater: {text}");
+    Ok(lines.filter(|line| !line.trim().is_empty()).collect())
+}
+
+fn parse_legacy_installed(raw: &[u8], system: bool) -> Result<Vec<InstalledAddon>> {
+    let text = std::str::from_utf8(raw).context("Niepoprawne kodowanie listy dodatków")?;
+    let rows = legacy_table_rows(text, &["NAME", "VERSION", "TYPE"], "no components installed")?;
+    rows.into_iter()
+        .map(|row| {
+            let (mut fields, kind) = legacy_fields(row)
+                .ok_or_else(|| anyhow!("Nieznany wiersz listy dodatków: {row}"))?;
+            let version = fields.pop().context("Brak wersji dodatku")?;
+            anyhow::ensure!(!fields.is_empty(), "Brak nazwy dodatku: {row}");
+            let name = fields.join(" ");
+            Ok(InstalledAddon {
+                directory_name: name.clone(),
+                name,
+                version: version.to_owned(),
+                component_type: kind.to_owned(),
+                // The v0.2.1 text table does not expose directories or paths.
+                path: String::new(),
+                is_system: system,
+            })
+        })
+        .collect()
+}
+
+fn parse_legacy_updates(raw: &[u8]) -> Result<UpdateOverview> {
+    let text = std::str::from_utf8(raw).context("Niepoprawne kodowanie listy aktualizacji")?;
+    let rows = legacy_table_rows(
+        text,
+        &["NAME", "CURRENT", "AVAILABLE", "ID", "SIZE", "TYPE"],
+        "no updates available",
+    )?;
+    let available = rows
+        .into_iter()
+        .map(|row| {
+            let (mut fields, kind) = legacy_fields(row)
+                .ok_or_else(|| anyhow!("Nieznany wiersz aktualizacji: {row}"))?;
+            let unit_or_size = fields.pop().context("Brak rozmiaru aktualizacji")?;
+            if matches!(
+                unit_or_size,
+                "B" | "KB" | "MB" | "GB" | "TB" | "KiB" | "MiB" | "GiB" | "TiB"
+            ) {
+                fields.pop().context("Brak wartości rozmiaru aktualizacji")?;
+            }
+            let id = fields.pop().context("Brak identyfikatora aktualizacji")?;
+            anyhow::ensure!(id.parse::<u64>().is_ok(), "Niepoprawny identyfikator: {row}");
+            let latest_version = fields.pop().context("Brak nowej wersji")?.to_owned();
+            let version = fields.pop().context("Brak zainstalowanej wersji")?.to_owned();
+            anyhow::ensure!(!fields.is_empty(), "Brak nazwy aktualizacji: {row}");
+            let name = fields.join(" ");
+            Ok(AvailableAddonUpdate {
+                installed: InstalledAddon {
+                    directory_name: name.clone(),
+                    name,
+                    version,
+                    component_type: kind.to_owned(),
+                    path: String::new(),
+                    is_system: false,
+                },
+                latest_version,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(UpdateOverview {
+        available,
+        issues: Vec::new(),
+        skipped: 0,
+        unmatched: 0,
+    })
+}
+
+fn installed_addons_in(home: &Path, system: bool) -> Result<Vec<InstalledAddon>> {
     let args: &[&str] = if system {
         &["--system", "list-installed", "--json"]
     } else {
         &["list-installed", "--json"]
     };
-    let raw = updater_json(&home, args, &[])?;
-    let mut result: InstalledResponse = serde_json::from_slice(&raw)
-        .context("Niepoprawna lista zainstalowanych dodatków w JSON")?;
-    result
-        .components
-        .sort_by_key(|addon| addon.name.to_lowercase());
-    Ok(result.components)
+    let mut addons = match updater_output(home, args, &[]) {
+        Ok(raw) => {
+            let result: InstalledResponse = serde_json::from_slice(&raw)
+                .context("Niepoprawna lista zainstalowanych dodatków w JSON")?;
+            result.components
+        }
+        Err(error) if unsupported_json_option(&error) => {
+            let old_args: &[&str] = if system {
+                &["--system", "list-installed"]
+            } else {
+                &["list-installed"]
+            };
+            parse_legacy_installed(&updater_output(home, old_args, &[])?, system)?
+        }
+        Err(error) => return Err(error),
+    };
+    addons.sort_by_key(|addon| addon.name.to_lowercase());
+    Ok(addons)
 }
 
-pub fn available_addon_updates() -> Result<UpdateOverview> {
-    let home = home()?;
-    let raw = updater_json(&home, &["check", "--json"], &[1, 100])?;
+pub fn installed_addons(system: bool) -> Result<Vec<InstalledAddon>> {
+    installed_addons_in(&home()?, system)
+}
+
+fn available_addon_updates_in(home: &Path) -> Result<UpdateOverview> {
+    let raw = match updater_output(home, &["check", "--json"], &[1, 100]) {
+        Ok(raw) => raw,
+        Err(error) if unsupported_json_option(&error) => {
+            return parse_legacy_updates(&updater_output(home, &["check"], &[100])?);
+        }
+        Err(error) => return Err(error),
+    };
     let result: UpdateResponse =
         serde_json::from_slice(&raw).context("Niepoprawna lista aktualizacji w JSON")?;
     let issues = result
@@ -1174,6 +1322,10 @@ pub fn available_addon_updates() -> Result<UpdateOverview> {
         skipped: result.skipped.len(),
         unmatched: result.unmatched.len(),
     })
+}
+
+pub fn available_addon_updates() -> Result<UpdateOverview> {
+    available_addon_updates_in(&home()?)
 }
 
 pub fn atomic_write(path: &Path, content: &[u8]) -> Result<()> {
@@ -1567,6 +1719,85 @@ mod tests {
         assert_eq!(parsed.components.len(), 2);
         assert!(!parsed.components[0].is_system);
         assert!(parsed.components[1].is_system);
+    }
+
+    #[test]
+    fn parses_legacy_installed_tables_without_json() {
+        let table = b"2 installed components available.\n\nNAME            VERSION   TYPE\nWeather Report  2.0.0     Plasma Widget\nMy  Theme       N/A       Global Theme\n";
+        let addons = parse_legacy_installed(table, true).unwrap();
+        assert_eq!(addons.len(), 2);
+        assert_eq!(addons[0].name, "Weather Report");
+        assert_eq!(addons[0].version, "2.0.0");
+        assert_eq!(addons[0].component_type, "Plasma Widget");
+        assert!(addons[0].is_system);
+        assert!(addons[0].path.is_empty());
+        assert_eq!(addons[1].name, "My Theme");
+        assert_eq!(addons[1].version, "N/A");
+        assert!(parse_legacy_installed(b"no components installed\n", false)
+            .unwrap()
+            .is_empty());
+        assert!(parse_legacy_installed(b"not a table", false).is_err());
+    }
+
+    #[test]
+    fn parses_legacy_check_tables_without_json() {
+        let table = b"2 updates available.\n\nNAME             CURRENT  AVAILABLE  ID     SIZE      TYPE\nWeather Report   2.0.0    2.1.0      12345  42.0 KiB  Plasma Widget\nMy Dark Theme    N/A      1.2.3      9876   -         Global Theme\n";
+        let overview = parse_legacy_updates(table).unwrap();
+        assert_eq!(overview.available.len(), 2);
+        assert_eq!(overview.available[0].installed.name, "Weather Report");
+        assert_eq!(overview.available[0].latest_version, "2.1.0");
+        assert_eq!(overview.available[1].installed.name, "My Dark Theme");
+        assert_eq!(overview.available[1].latest_version, "1.2.3");
+        assert!(parse_legacy_updates(b"no updates available\n")
+            .unwrap()
+            .available
+            .is_empty());
+        assert!(parse_legacy_updates(b"invalid output").is_err());
+    }
+
+    #[test]
+    fn falls_back_to_legacy_cli_only_when_json_is_unsupported() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join(".local/bin/plasmoid-updater");
+        fs::create_dir_all(path.parent().unwrap()).unwrap();
+        fs::write(
+            &path,
+            r##"#!/bin/sh
+for arg in "$@"; do
+    case "$arg" in
+        --version) echo 'plasmoid-updater 0.2.1'; exit 0 ;;
+        --json) echo "error: unexpected argument '--json' found" >&2; exit 2 ;;
+    esac
+done
+case " $* " in
+    *" update --help "*) echo 'Usage: plasmoid-updater update --yes'; exit 0 ;;
+    *" list-installed "*)
+        case " $* " in
+            *" --system "*) echo 'no components installed'; exit 0 ;;
+        esac
+        printf '%s\n' '1 installed component available.' 'NAME  VERSION  TYPE' 'Weather Report  2.0.0  Plasma Widget'
+        ;;
+    *" check "*)
+        printf '%s\n' '1 update available.' 'NAME  CURRENT  AVAILABLE  ID  SIZE  TYPE' 'Weather Report  2.0.0  2.1.0  12345  42.0 KiB  Plasma Widget'
+        ;;
+    *) exit 3 ;;
+esac
+"##,
+        )
+        .unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o755)).unwrap();
+        let addons = installed_addons_in(temp.path(), false).unwrap();
+        assert_eq!(addons.len(), 1);
+        assert_eq!(addons[0].name, "Weather Report");
+        assert!(installed_addons_in(temp.path(), true)
+            .unwrap()
+            .is_empty());
+        let updates = available_addon_updates_in(temp.path()).unwrap();
+        assert_eq!(updates.available.len(), 1);
+        assert_eq!(updates.available[0].latest_version, "2.1.0");
+        let mut logs = Vec::new();
+        run_safe_dry_run(temp.path(), &mut |message| logs.push(message.to_owned())).unwrap();
+        assert!(logs.iter().any(|line| line.contains("check")));
     }
 
     #[test]

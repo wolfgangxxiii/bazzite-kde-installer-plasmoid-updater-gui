@@ -34,15 +34,15 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Przyciski nagłówka mają wyrównane rozmiary, a odświeżanie ma wyśrodkowaną ikonę. Kafelki i osobne karty harmonogramu, powiadomień oraz instalacji zachowują odstępy.
 - AppImage odczytuje preferowany motyw kursora z ustawień GTK4 lub KDE Plasma, zachowując jawnie ustawione ścieżki `XCURSOR_PATH` i przeszukując motywy systemowe przed dołączonymi ikonami.
 - Na KDE Plasma program dodatkowo ustawia motyw i rozmiar kursora bezpośrednio w GTK, korzystając z `kcminputrc` (z fallbackiem do `gtk-4.0/settings.ini`). Pomaga to, gdy portal Wayland zgłasza GTK przestarzały motyw kursora.
-- Pokazuje dodatki rozpoznawane przez `plasmoid-updater list-installed --json` zarówno dla użytkownika, jak i z systemu (`--system list-installed --json` — **tylko odczyt**). Pozwala wyszukiwać i filtrować listę.
-- Wyświetla wykryte dostępne aktualizacje dodatków z KDE Store wraz z wersjami, bez dokonywania zmian podczas sprawdzania.
+- Pokazuje dodatki użytkownika i systemowe (skanowanie **tylko do odczytu**). Korzysta z `list-installed --json`, a gdy zainstalowany `plasmoid-updater` nie obsługuje JSON (jak oficjalne wydanie v0.2.1), bezpiecznie odczytuje jego tabelę tekstową. W starszej wersji ścieżki i nazwy katalogów dodatków nie są dostępne.
+- Wyświetla wykryte dostępne aktualizacje dodatków z KDE Store wraz z wersjami, bez dokonywania zmian podczas sprawdzania. Starszy `check` bez JSON jest automatycznie obsługiwany.
 - Pokazuje przyczyny błędów sprawdzania i ostrzega, jeżeli skanowanie dodatków systemowych zakończyło się tylko częściowo.
 - Odświeża listę komponentów po ręcznym cyklu aktualizacji.
 - Instaluje narzędzie w `~/.local/bin` — bez `sudo` i bez zmiany obrazu Bazzite.
 - Odczytuje wykluczenia z istniejącego `plasmoid-updater.toml`, nie nadpisując pozostałych indywidualnych opcji pliku.
 - Wykrywa starsze jednostki systemd. Przejęcie niezarządzanych `plasmoid-updater.service/timer` wymaga zgody użytkownika; ich kopie są zachowywane przed zmianą.
 - W razie błędu zapisu przywraca również wcześniejsze ustawienia, konfigurację upstream i agenta, a nie tylko jednostki systemd.
-- Sprawdza aktualizacje, pokazuje symulację (`--dry-run`) i wykonuje aktualizacje dodatków użytkownika.
+- Sprawdza aktualizacje, pokazuje symulację (`update --dry-run`, a dla starszych wydań bez tej opcji bezpieczny `check`) i wykonuje aktualizacje dodatków użytkownika.
 - **Samoczynnie aktualizuje również `plasmoid-updater`:** w każdym cyklu sprawdza nowe wydanie na GitHub, porównuje wersję i pobiera binarkę tylko wtedy, gdy jest nowsza.
 - Konfiguruje automatyczne aktualizacje dodatków i narzędzia co **6, 12 lub 24 godziny** przez timer `systemd --user` — **bez konieczności uruchamiania GUI w tle**.
 - Instaluje lekki, niezależny agent aktualizacji uruchamiany przez systemd; działa nawet po zamknięciu AppImage.
@@ -151,7 +151,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.5.8` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.5.9` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

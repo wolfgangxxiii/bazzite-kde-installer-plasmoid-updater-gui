@@ -1148,8 +1148,7 @@ fn updater_output(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<
 // and fall back to the human-readable tables; propagate all unrelated errors.
 fn unsupported_json_option(error: &anyhow::Error) -> bool {
     let message = format!("{error:#}");
-    message.contains("exit status: 2")
-        && message.contains("unexpected argument '--json'")
+    message.contains("exit status: 2") && message.contains("unexpected argument '--json'")
 }
 
 const LEGACY_COMPONENT_TYPES: &[&str] = &[
@@ -1192,7 +1191,11 @@ fn legacy_table_rows<'a>(text: &'a str, header: &[&str], empty: &str) -> Result<
 
 fn parse_legacy_installed(raw: &[u8], system: bool) -> Result<Vec<InstalledAddon>> {
     let text = std::str::from_utf8(raw).context("Niepoprawne kodowanie listy dodatków")?;
-    let rows = legacy_table_rows(text, &["NAME", "VERSION", "TYPE"], "no components installed")?;
+    let rows = legacy_table_rows(
+        text,
+        &["NAME", "VERSION", "TYPE"],
+        "no components installed",
+    )?;
     rows.into_iter()
         .map(|row| {
             let (mut fields, kind) = legacy_fields(row)
@@ -1223,19 +1226,27 @@ fn parse_legacy_updates(raw: &[u8]) -> Result<UpdateOverview> {
     let available = rows
         .into_iter()
         .map(|row| {
-            let (mut fields, kind) = legacy_fields(row)
-                .ok_or_else(|| anyhow!("Nieznany wiersz aktualizacji: {row}"))?;
+            let (mut fields, kind) =
+                legacy_fields(row).ok_or_else(|| anyhow!("Nieznany wiersz aktualizacji: {row}"))?;
             let unit_or_size = fields.pop().context("Brak rozmiaru aktualizacji")?;
             if matches!(
                 unit_or_size,
                 "B" | "KB" | "MB" | "GB" | "TB" | "KiB" | "MiB" | "GiB" | "TiB"
             ) {
-                fields.pop().context("Brak wartości rozmiaru aktualizacji")?;
+                fields
+                    .pop()
+                    .context("Brak wartości rozmiaru aktualizacji")?;
             }
             let id = fields.pop().context("Brak identyfikatora aktualizacji")?;
-            anyhow::ensure!(id.parse::<u64>().is_ok(), "Niepoprawny identyfikator: {row}");
+            anyhow::ensure!(
+                id.parse::<u64>().is_ok(),
+                "Niepoprawny identyfikator: {row}"
+            );
             let latest_version = fields.pop().context("Brak nowej wersji")?.to_owned();
-            let version = fields.pop().context("Brak zainstalowanej wersji")?.to_owned();
+            let version = fields
+                .pop()
+                .context("Brak zainstalowanej wersji")?
+                .to_owned();
             anyhow::ensure!(!fields.is_empty(), "Brak nazwy aktualizacji: {row}");
             let name = fields.join(" ");
             Ok(AvailableAddonUpdate {
@@ -1789,9 +1800,7 @@ esac
         let addons = installed_addons_in(temp.path(), false).unwrap();
         assert_eq!(addons.len(), 1);
         assert_eq!(addons[0].name, "Weather Report");
-        assert!(installed_addons_in(temp.path(), true)
-            .unwrap()
-            .is_empty());
+        assert!(installed_addons_in(temp.path(), true).unwrap().is_empty());
         let updates = available_addon_updates_in(temp.path()).unwrap();
         assert_eq!(updates.available.len(), 1);
         assert_eq!(updates.available[0].latest_version, "2.1.0");

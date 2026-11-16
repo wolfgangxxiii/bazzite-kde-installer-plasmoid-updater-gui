@@ -265,17 +265,15 @@ fn render_inventory(parts: &UiParts) {
         );
     }
     for addon in visible {
-        let update = updates
-            .iter()
-            .find(|item| {
-                if !item.installed.path.is_empty() && !addon.path.is_empty() {
-                    item.installed.path == addon.path
-                } else {
-                    item.installed.name == addon.name
-                        && item.installed.component_type == addon.component_type
-                        && item.installed.is_system == addon.is_system
-                }
-            });
+        let update = updates.iter().find(|item| {
+            if !item.installed.path.is_empty() && !addon.path.is_empty() {
+                item.installed.path == addon.path
+            } else {
+                item.installed.name == addon.name
+                    && item.installed.component_type == addon.component_type
+                    && item.installed.is_system == addon.is_system
+            }
+        });
         let description = match update {
             Some(item) => format!(
                 "{} · {} · {}: {}{}",

@@ -1246,7 +1246,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     steps.set_xalign(0.0);
     steps.set_margin_top(8);
     steps.set_margin_bottom(8);
-    let expand_dashboard = std::env::var("BAZZITE_GUI_SMOKE_EXPAND_DASHBOARD").as_deref() == Ok("1");
+    let expand_dashboard =
+        std::env::var("BAZZITE_GUI_SMOKE_EXPAND_DASHBOARD").as_deref() == Ok("1");
     let first_steps = expander_card(t("Pierwsze kroki", "First steps"), &steps, expand_dashboard);
     dashboard.append(&first_steps);
 

@@ -1,0 +1,1 @@
+# bazzite-kde-installer-plasmoid-updater-gui

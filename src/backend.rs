@@ -94,7 +94,7 @@ pub struct AvailableAddonUpdate {
     pub latest_version: String,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct UpdateOverview {
     pub available: Vec<AvailableAddonUpdate>,
     pub issues: Vec<AddonIssue>,
@@ -102,7 +102,7 @@ pub struct UpdateOverview {
     pub unmatched: usize,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct AddonIssue {
     pub name: String,
     pub reason: String,

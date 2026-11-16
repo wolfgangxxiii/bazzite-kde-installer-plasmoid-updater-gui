@@ -22,11 +22,12 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Sprawdza Bazzite, KDE, architekturę, `curl`, Homebrew, `bsdtar`, `kpackagetool6`, `systemctl --user`, istniejącą konfigurację i starsze harmonogramy.
 - Weryfikuje pobrany plik za pomocą **SHA-256** przed instalacją.
 - Oddziela funkcje na pięć ekranów w bocznym menu: **Pulpit**, **Instalacja**, **Dodatki Plasma**, **Automatyzacja** i **Dziennik**.
-- Pokazuje wszystkie pięć sekcji nawigacji jednocześnie. **Wektorowe ikony** są rysowane przez GTK i nie zależą od dostępności ikon w motywie Bazzite ani wewnątrz AppImage.
+- Pokazuje wszystkie pięć sekcji nawigacji jednocześnie. **Wektorowe ikony** nawigacji, paska nagłówka i statusu są rysowane przez GTK i nie zależą od ikon motywu Bazzite ani AppImage.
 - Zwarte, skalujące się karty zawijają długie opisy bez chowania przycisków. Osobna karta naprawy agenta zawsze pokazuje przycisk **Napraw agenta**; pasek postępu pojawia się tylko podczas pracy.
 - Oferuje minimalistyczny wybór języka **PL / EN** w nagłówku. Wybór jest zapisywany w `~/.config/bazzite-plasmoid-updater-gui/language`; etykiety i diagnostyka GUI są dwujęzyczne, a oryginalne logi poleceń pozostają niezmienione.
 - Pokazuje czytelne kafelki stanu środowiska, narzędzia, agenta i timera. Przy przestarzałym agencie udostępnia **Napraw agenta**, bez modyfikowania harmonogramu oraz innych usług systemd.
-- Ma **adaptacyjny interfejs**: na wąskim ekranie menu zwija się automatycznie, a przycisk w nagłówku pozwala je pokazać lub ukryć. Opisy i przyciski nie konkurują o miejsce w jednym wierszu.
+- Ma **adaptacyjny interfejs**: na wąskim ekranie menu wysuwa się ponad zawartość, nie zabierając miejsca kartom. Kafelki nie mają sztywnej szerokości, a opisy i etykiety przycisków zawijają się na małych ekranach.
+- Odświeża status narzędzia i usług systemd poza głównym wątkiem, bez blokowania interfejsu. Zmiana PL/EN zachowuje rozmiar okna, wyniki skanowania, wyszukiwanie i dziennik.
 - Grupuje harmonogram i powiadomienia, a **ustawienia zaawansowane** oraz **testowanie i uruchamianie ręczne** umieszcza w zwijanych sekcjach. Pokazuje instrukcję pierwszych kroków, puste stany list i pasek postępu na dole okna.
 - Pokazuje dodatki rozpoznawane przez `plasmoid-updater list-installed --json` zarówno dla użytkownika, jak i z systemu (`--system list-installed --json` — **tylko odczyt**). Pozwala wyszukiwać i filtrować listę.
 - Wyświetla wykryte dostępne aktualizacje dodatków z KDE Store wraz z wersjami, bez dokonywania zmian podczas sprawdzania.
@@ -145,7 +146,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.5.3` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.5.4` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

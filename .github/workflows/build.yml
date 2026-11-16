@@ -24,7 +24,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             build-essential pkg-config libgtk-4-dev libadwaita-1-dev \
             librsvg2-bin libglib2.0-bin curl file patchelf desktop-file-utils \
-            libfuse2t64 xvfb xauth
+            libfuse2t64 xvfb xauth xdotool scrot
       - name: Check formatting
         run: cargo fmt --all -- --check
       - name: Validate Bazzite host-test script
@@ -34,7 +34,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.3'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.4'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -67,6 +67,14 @@ jobs:
             echo "English GUI did not remain open for the smoke test (exit $exit_code)."
             exit 1
           fi
+      - name: Exercise responsive layouts and capture screenshots
+        run: xvfb-run -a -s '-screen 0 1440x900x24' bash scripts/smoke-ui.sh
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: ui-layout-screenshots
+          path: ui-smoke/*
+          if-no-files-found: ignore
       - uses: actions/upload-artifact@v4
         with:
           name: bazzite-plasmoid-updater-gui-appimage
@@ -80,13 +88,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.3 >/dev/null 2>&1; then
-              echo "v0.5.3 already published; use a new version tag for another release."
+            if gh release view v0.5.4 >/dev/null 2>&1; then
+              echo "v0.5.4 already published; use a new version tag for another release."
             else
-              gh release create v0.5.3 dist/*.AppImage \
+              gh release create v0.5.4 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.3" \
-                --notes "Poprawki interfejsu pod Bazzite KDE: niezależne od motywu systemu, wektorowe ikony nawigacji i stanu; czytelne karty, których opisy nie zasłaniają przycisków, w tym Napraw agenta; mniejsze odstępy, adaptacyjne kafelki oraz zwijane ustawienia zaawansowane i narzędzia testowe. Zachowano PL/EN i automatyczne aktualizacje systemd --user."
+                --title "Bazzite Plasmoid Updater GUI v0.5.4" \
+                --notes "Ulepszenia skalowania w GTK4: boczne menu libadwaita nakładane na treść w wąskim oknie, kafelki bez sztywnej szerokości, zawijane etykiety przycisków i własne ikony paska nagłówka. Poprawiono stan przycisku naprawy agenta, odświeżanie statusu bez blokowania GUI oraz zachowanie list dodatków, dziennika i rozmiaru okna przy zmianie PL/EN. Pulpit ma bardziej zwarty układ."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

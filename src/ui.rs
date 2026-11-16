@@ -107,7 +107,7 @@ fn button(label: &str, suggested: bool) -> gtk::Button {
 pub fn build(app: &adw::Application) {
     let window = adw::ApplicationWindow::builder()
         .application(app)
-        .title("Bazzite • Plasmoid Updater")
+        .title("Instalator plasmoid-updater • Bazzite")
         .default_width(760)
         .default_height(840)
         .build();
@@ -118,7 +118,7 @@ pub fn build(app: &adw::Application) {
     toolbar.add_top_bar(&header);
 
     let header_title = adw::WindowTitle::new(
-        "Plasmoid Updater",
+        "Instalator plasmoid-updater",
         "Bazzite KDE • instalacja i automatyzacja",
     );
     header.set_title_widget(Some(&header_title));
@@ -235,10 +235,8 @@ pub fn build(app: &adw::Application) {
     settings_group.add(&restart);
 
     let migrate_legacy = adw::SwitchRow::builder()
-        .title("Przejmij starszy harmonogram, jeśli istnieje")
-        .subtitle(
-            "Po zapisaniu wyłączy plasmoid-updater.timer; zachowa jego pliki i aktywuje nowy timer",
-        )
+        .title("Przejmij istniejącą usługę i harmonogram plasmoid-updater")
+        .subtitle("Zapisze kopie starych jednostek, wyłączy poprzedni timer i skonfiguruje nowy")
         .active(false)
         .build();
     settings_group.add(&migrate_legacy);

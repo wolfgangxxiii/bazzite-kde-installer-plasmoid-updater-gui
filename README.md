@@ -23,7 +23,7 @@ Rust · GTK4 · libadwaita · AppImage · systemd --user
 - Weryfikuje pobrany plik za pomocą **SHA-256** przed instalacją.
 - Instaluje narzędzie w `~/.local/bin` — bez `sudo` i bez zmiany obrazu Bazzite.
 - Odczytuje wykluczenia z istniejącego `plasmoid-updater.toml`, nie nadpisując pozostałych indywidualnych opcji pliku.
-- Wykrywa starszy `plasmoid-updater.timer` i pozwala go wyłączyć przy migracji **tylko po świadomym zatwierdzeniu**.
+- Wykrywa starsze jednostki systemd. Przejęcie niezarządzanych `plasmoid-updater.service/timer` wymaga zgody użytkownika; ich kopie są zachowywane przed zmianą.
 - Sprawdza aktualizacje, pokazuje symulację (`--dry-run`) i wykonuje aktualizacje dodatków użytkownika.
 - **Samoczynnie aktualizuje również `plasmoid-updater`:** w każdym cyklu sprawdza nowe wydanie na GitHub, porównuje wersję i pobiera binarkę tylko wtedy, gdy jest nowsza.
 - Konfiguruje automatyczne aktualizacje dodatków i narzędzia co **6, 12 lub 24 godziny** przez timer `systemd --user` — **bez konieczności uruchamiania GUI w tle**.
@@ -52,7 +52,7 @@ Program **nie** aktualizuje samego Bazzite, Flatpaków, sterowników ani pakiet�
 4. Kliknij **Zainstaluj / uaktualnij** — jeśli istniejąca wersja jest aktualna, pozostanie bez zmian. Instalator uzupełni brakujące `bsdtar` przez Homebrew.
 5. Kliknij **Symuluj**, by zobaczyć potencjalne aktualizacje bez instalowania.
 6. Włącz **Automatyczne aktualizacje w tle** i **Aktualizuj również plasmoid-updater** (oba przełączniki są domyślnie włączone).
-7. Jeśli istnieje stary `plasmoid-updater.timer`, możesz zaznaczyć **Przejmij starszy harmonogram**. Jego pliki nie zostaną usunięte, lecz timer zostanie wyłączony.
+7. Jeśli istnieją wcześniej utworzone `plasmoid-updater.service/timer`, zaznacz **Przejmij istniejącą usługę i harmonogram plasmoid-updater**. Instalator utworzy kopie jednostek, wyłączy stary timer i dopiero wtedy skonfiguruje nowy. Wcześniejsze jednostki `bazzite-plasmoid-updater.*` utworzone przez ten instalator są wyłączane automatycznie.
 8. Wybierz harmonogram i kliknij **Zapisz i zastosuj**.
 9. Kliknij **Przetestuj**, aby zweryfikować konfigurację i symulację. **Uruchom teraz** wykonuje już prawdziwy cykl instalowania dostępnych aktualizacji.
 
@@ -63,11 +63,11 @@ Wymagania środowiska: **Bazzite KDE Plasma 6, x86_64**, dostęp do Internetu i 
 | Element | Ścieżka / działanie |
 |---|---|
 | Binarka | Istniejąca instalacja z `PATH` / `~/.cargo/bin` albo `~/.local/bin/plasmoid-updater` |
-| Agent automatyzacji | `~/.local/bin/bazzite-plasmoid-updater-agent` |
+| Agent automatyzacji | `~/.local/bin/plasmoid-updater-agent` |
 | Ustawienia upstream | `~/.config/plasmoid-updater.toml` |
 | Ustawienia GUI | `~/.config/bazzite-plasmoid-updater-gui/settings.toml` |
-| Usługa | `~/.config/systemd/user/bazzite-plasmoid-updater.service` |
-| Timer | `~/.config/systemd/user/bazzite-plasmoid-updater.timer` |
+| Usługa | `~/.config/systemd/user/plasmoid-updater.service` |
+| Timer | `~/.config/systemd/user/plasmoid-updater.timer` |
 
 Po zmianie ustawień program przeładowuje konfigurację `systemd --user` oraz odpowiednio włącza lub wyłącza timer. Każdy zaplanowany cykl uruchamia **samodzielnego agenta**. Najpierw sprawdza on wydanie `plasmoid-updater` na GitHub i ewentualnie weryfikuje SHA-256 oraz wymienia binarkę. Następnie wykonuje `plasmoid-updater --skip-plasma-detection update --yes --no-restart-plasma` dla dodatków użytkownika. Gdy GitHub jest chwilowo niedostępny, agent i tak próbuje zaktualizować dodatki z już zainstalowaną binarką.
 
@@ -80,16 +80,16 @@ Automatyzacja pracuje w sesji użytkownika, **nie uruchamia się stale jako usł
 Sprawdzenie stanu:
 
 ```bash
-systemctl --user status bazzite-plasmoid-updater.timer
+systemctl --user status plasmoid-updater.timer
 systemctl --user list-timers --all
-journalctl --user -u bazzite-plasmoid-updater.service -n 50 --no-pager
-systemctl --user start bazzite-plasmoid-updater.service   # uruchom i przetestuj cały cykl teraz
+journalctl --user -u plasmoid-updater.service -n 50 --no-pager
+systemctl --user start plasmoid-updater.service   # uruchom pełny cykl teraz (instaluje aktualizacje)
 ```
 
 Zatrzymanie automatyzacji:
 
 ```bash
-systemctl --user disable --now bazzite-plasmoid-updater.timer
+systemctl --user disable --now plasmoid-updater.timer
 ```
 
 ### Test na rzeczywistym Bazzite
@@ -125,7 +125,7 @@ Wynik: `dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage`.
 
 ## Rozwój
 
-Wersja `0.3.0` dodaje diagnostykę zależności, wyszukiwanie istniejących instalacji, import ustawień upstream, migrację starszych timerów oraz test całej konfiguracji w GUI. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
+Wersja `0.3.1` używa nazw `plasmoid-updater.service`, `plasmoid-updater.timer` oraz `plasmoid-updater-agent`. Istniejące niezarządzane jednostki są archiwizowane w `~/.config/bazzite-plasmoid-updater-gui/backups/` przed przejęciem. Zgłoszenia błędów i propozycje funkcji są mile widziane przez [Issues](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues).
 
 Projekt nie jest oficjalnie powiązany z Bazzite, KDE ani autorem `plasmoid-updater`.
 

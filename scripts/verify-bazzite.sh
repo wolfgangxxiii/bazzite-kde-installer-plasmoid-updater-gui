@@ -57,14 +57,14 @@ else
 fi
 
 echo 'Stan timera:'
-systemctl --user status bazzite-plasmoid-updater.timer --no-pager || {
+systemctl --user status plasmoid-updater.timer --no-pager || {
   problems=$((problems + 1))
 }
 echo 'Następne zaplanowane uruchomienie:'
-systemctl --user list-timers --all --no-pager bazzite-plasmoid-updater.timer || true
+systemctl --user list-timers --all --no-pager plasmoid-updater.timer || true
 
-if [[ -x "$HOME/.local/bin/bazzite-plasmoid-updater-agent" ]]; then
-  "$HOME/.local/bin/bazzite-plasmoid-updater-agent" --version
+if [[ -x "$HOME/.local/bin/plasmoid-updater-agent" ]]; then
+  "$HOME/.local/bin/plasmoid-updater-agent" --version
 else
   echo '✗ Brak agenta systemd.'
   problems=$((problems + 1))

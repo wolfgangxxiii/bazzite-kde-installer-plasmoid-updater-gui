@@ -14,9 +14,10 @@ use toml_edit::{value, Array, DocumentMut};
 
 pub const UPSTREAM: &str = "https://github.com/uwuclxdy/plasmoid-updater";
 const RELEASE_API: &str = "https://api.github.com/repos/uwuclxdy/plasmoid-updater/releases/latest";
-const SERVICE: &str = "bazzite-plasmoid-updater.service";
-const TIMER: &str = "bazzite-plasmoid-updater.timer";
-const AGENT: &str = "bazzite-plasmoid-updater-agent";
+const SERVICE: &str = "plasmoid-updater.service";
+const TIMER: &str = "plasmoid-updater.timer";
+const PREVIOUS_TIMER: &str = "bazzite-plasmoid-updater.timer";
+const AGENT: &str = "plasmoid-updater-agent";
 const MANAGED: &str = "# Managed by Bazzite Plasmoid Updater GUI";
 
 #[derive(Clone, Copy, Debug)]
@@ -242,9 +243,32 @@ fn user_unit_state(unit: &str, action: &str) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn legacy_timer_exists() -> bool {
-    user_unit_state("plasmoid-updater.timer", "is-enabled")
-        || user_unit_state("plasmoid-updater.timer", "is-active")
+fn user_units(home: &Path) -> PathBuf {
+    home.join(".config/systemd/user")
+}
+
+fn is_managed_unit(path: &Path) -> bool {
+    fs::read_to_string(path).is_ok_and(|content| content.starts_with(MANAGED))
+}
+
+fn unit_exists(path: &Path) -> bool {
+    fs::symlink_metadata(path).is_ok()
+}
+
+fn unmanaged_unit_collision(home: &Path) -> bool {
+    let units = user_units(home);
+    let local_collision = [SERVICE, TIMER]
+        .iter()
+        .any(|name| unit_exists(&units.join(name)) && !is_managed_unit(&units.join(name)));
+    let external_timer = !is_managed_unit(&units.join(TIMER))
+        && (user_unit_state(TIMER, "is-enabled") || user_unit_state(TIMER, "is-active"));
+    local_collision || external_timer
+}
+
+fn legacy_timer_exists(home: &Path) -> bool {
+    let old_managed_active = user_unit_state(PREVIOUS_TIMER, "is-enabled")
+        || user_unit_state(PREVIOUS_TIMER, "is-active");
+    old_managed_active || unmanaged_unit_collision(home)
 }
 
 fn unit_property(unit: &str, property: &str) -> Option<String> {
@@ -274,8 +298,9 @@ pub fn status() -> String {
         .map(|(path, version)| format!("plasmoid-updater {version} ({})", path.display()))
         .unwrap_or_else(|| "plasmoid-updater: nie znaleziono".to_owned());
     let bsdtar = bsdtar_exists(&home);
-    let enabled = user_unit_state(TIMER, "is-enabled");
-    let active = user_unit_state(TIMER, "is-active");
+    let managed = is_managed_unit(&user_units(&home).join(TIMER));
+    let enabled = managed && user_unit_state(TIMER, "is-enabled");
+    let active = managed && user_unit_state(TIMER, "is-active");
     let next = if enabled {
         unit_property(TIMER, "NextElapseUSecRealtime").unwrap_or_else(|| "brak danych".into())
     } else {
@@ -305,7 +330,7 @@ pub fn status() -> String {
         if executable(&agent_binary(&home)) { "gotowy" } else { "brak" },
         if active { "aktywny" } else if enabled { "włączony, ale nieaktywny" } else { "wyłączony" },
         next,
-        if legacy_timer_exists() { "\n! Wykryto starszy harmonogram plasmoid-updater.timer" } else { "" }
+        if legacy_timer_exists(&home) { "\n! Wykryto starszy harmonogram — wymaga migracji" } else { "" }
     )
 }
 
@@ -319,6 +344,14 @@ pub fn execute(job: Job, settings: Settings, log: &mut dyn FnMut(&str)) -> Resul
         Job::Diagnose => diagnose(&home, log),
         Job::Test => test_configuration(&home, &settings, log),
         Job::RunService => {
+            anyhow::ensure!(
+                is_managed_unit(&user_units(&home).join(SERVICE)),
+                "Usługa plasmoid-updater.service nie jest skonfigurowana przez instalator. Najpierw kliknij «Zapisz i zastosuj»."
+            );
+            anyhow::ensure!(
+                unit_property(SERVICE, "LoadState").as_deref() == Some("loaded"),
+                "Usługa plasmoid-updater.service nie została załadowana przez systemd. Użyj «Zapisz i zastosuj», aby przeładować jednostki."
+            );
             log("Uruchamianie cyklu aktualizacji przez systemd --user…");
             output(Command::new("systemctl").args(["--user", "start", SERVICE]))?;
             log("Usługa zakończyła się sukcesem. Wynik jest dostępny w journalctl --user.");
@@ -394,8 +427,8 @@ fn diagnose(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
     } else {
         log("! Konfiguracja plasmoid-updater nie istnieje (można ją utworzyć z GUI).");
     }
-    if legacy_timer_exists() {
-        log("! Starszy timer plasmoid-updater.timer: wymaga świadomej migracji.");
+    if legacy_timer_exists(home) {
+        log("! Starszy timer: wymagane świadome przejęcie konfiguracji.");
     }
     if !missing.is_empty() {
         bail!(
@@ -488,7 +521,7 @@ fn test_configuration(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str
             "Timer systemd nie został poprawnie załadowany"
         );
         anyhow::ensure!(
-            !legacy_timer_exists(),
+            !legacy_timer_exists(home),
             "Starszy timer nadal jest aktywny lub włączony"
         );
         log("✓ Agent, usługa i harmonogram systemd są gotowe.");
@@ -752,13 +785,95 @@ fn install_agent(home: &Path, log: &mut dyn FnMut(&str)) -> Result<()> {
 }
 
 fn guarded_write(path: &Path, content: &str) -> Result<()> {
-    if path.exists() && !fs::read_to_string(path)?.contains(MANAGED) {
+    if unit_exists(path) && !is_managed_unit(path) {
         bail!(
             "Plik {} już istnieje i nie został utworzony przez ten program. Nie nadpisano go.",
             path.display()
         );
     }
     atomic_write(path, content.as_bytes())
+}
+
+fn guarded_write_or_takeover(path: &Path, content: &str, takeover: bool) -> Result<()> {
+    if takeover && !is_managed_unit(path) {
+        atomic_write(path, content.as_bytes())
+    } else {
+        guarded_write(path, content)
+    }
+}
+
+struct UnitSnapshot {
+    path: PathBuf,
+    previous: Option<Vec<u8>>,
+}
+
+fn snapshot_units(units: &Path) -> Result<Vec<UnitSnapshot>> {
+    [SERVICE, TIMER]
+        .iter()
+        .map(|name| {
+            let path = units.join(name);
+            let previous = if fs::symlink_metadata(&path).is_ok() {
+                Some(
+                    fs::read(&path)
+                        .with_context(|| format!("Nie można odczytać {}", path.display()))?,
+                )
+            } else {
+                None
+            };
+            Ok(UnitSnapshot { path, previous })
+        })
+        .collect()
+}
+
+fn backup_unmanaged_units(
+    home: &Path,
+    snapshots: &[UnitSnapshot],
+    log: &mut dyn FnMut(&str),
+) -> Result<()> {
+    let originals: Vec<_> = snapshots
+        .iter()
+        .filter(|item| item.previous.is_some() && !is_managed_unit(&item.path))
+        .collect();
+    if originals.is_empty() {
+        log("Brak niezarządzanych plików do archiwizacji — pozostałe stare jednostki pozostają nietknięte.");
+        return Ok(());
+    }
+    let parent = home.join(".config/bazzite-plasmoid-updater-gui/backups");
+    fs::create_dir_all(&parent)?;
+    let backup = tempfile::Builder::new()
+        .prefix("units-")
+        .tempdir_in(&parent)?;
+    for snapshot in originals {
+        let name = snapshot.path.file_name().context("Brak nazwy jednostki")?;
+        fs::write(
+            backup.path().join(name),
+            snapshot.previous.as_ref().unwrap(),
+        )?;
+    }
+    let saved = backup.keep();
+    log(&format!(
+        "Kopia starszych jednostek systemd: {}",
+        saved.display()
+    ));
+    Ok(())
+}
+
+fn restore_units(snapshots: &[UnitSnapshot], log: &mut dyn FnMut(&str)) {
+    for snapshot in snapshots {
+        let result = match &snapshot.previous {
+            Some(content) => atomic_write(&snapshot.path, content),
+            None if is_managed_unit(&snapshot.path) => {
+                fs::remove_file(&snapshot.path).map_err(Into::into)
+            }
+            None => Ok(()),
+        };
+        if let Err(error) = result {
+            log(&format!(
+                "Nie udało się przywrócić {}: {error:#}",
+                snapshot.path.display()
+            ));
+        }
+    }
 }
 
 fn timer_schedule(hours: u8) -> Result<&'static str> {
@@ -809,22 +924,19 @@ fn save_configuration(
             service_bsdtar_exists(home),
             "Brakuje bsdtar. Użyj najpierw przycisku Instaluj, aby program mógł dodać libarchive przez Homebrew."
         );
-        anyhow::ensure!(
-            !legacy_timer_exists() || migrate_legacy,
-            "Wykryto starszy plasmoid-updater.timer. Zaznacz opcję migracji w GUI, aby bezpiecznie wyłączyć stary harmonogram."
-        );
     }
+    let takeover = unmanaged_unit_collision(home);
+    anyhow::ensure!(
+        !takeover || migrate_legacy,
+        "Istnieją starsze jednostki plasmoid-updater.service/timer. Zaznacz w GUI przejęcie harmonogramu, aby zapisać kopię i zastąpić je nową konfiguracją."
+    );
     let config_path = upstream_config_path(home);
     let doc = upstream_document(home, settings)?;
 
-    let units = home.join(".config/systemd/user");
+    let units = user_units(home);
     let service_path = units.join(SERVICE);
     let timer_path = units.join(TIMER);
-    for path in [&service_path, &timer_path] {
-        if path.exists() && !fs::read_to_string(path)?.contains(MANAGED) {
-            bail!("Nie nadpisano niezarządzanego pliku {}", path.display());
-        }
-    }
+    let snapshots = snapshot_units(&units)?;
     let service = format!(
         "{MANAGED}\n[Unit]\nDescription=Update plasmoid-updater and user KDE Store addons\n\n[Service]\nType=oneshot\nEnvironment=PATH=%h/.local/bin:/home/linuxbrew/.linuxbrew/opt/libarchive/bin:/home/linuxbrew/.linuxbrew/bin:/usr/local/bin:/usr/bin\nExecStart=%h/.local/bin/{AGENT} run\nNice=10\nIOSchedulingClass=idle\n"
     );
@@ -836,45 +948,58 @@ fn save_configuration(
     if settings.automatic {
         install_agent(home, log)?;
     }
-    log("Zapisywanie konfiguracji z zachowaniem istniejących komentarzy…");
-    atomic_write(&config_path, doc.to_string().as_bytes())?;
-    guarded_write(&service_path, &service)?;
-    guarded_write(&timer_path, &timer)?;
 
-    log("Odświeżanie usług użytkownika systemd…");
-    output(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
-    // Write the settings before enabling a persistent timer: an overdue timer
-    // may start immediately during 'enable --now'.
-    settings.save(home)?;
-    if settings.automatic {
-        let migrated = migrate_legacy && legacy_timer_exists();
-        if migrated {
-            log("Migracja: wyłączanie starszego timera bez usuwania jego plików…");
-            output(Command::new("systemctl").args([
+    if takeover {
+        backup_unmanaged_units(home, &snapshots, log)?;
+    }
+    let old_target_enabled = user_unit_state(TIMER, "is-enabled");
+    let old_target_active = user_unit_state(TIMER, "is-active");
+    let old_previous_enabled = user_unit_state(PREVIOUS_TIMER, "is-enabled");
+    let old_previous_active = user_unit_state(PREVIOUS_TIMER, "is-active");
+
+    let apply = (|| -> Result<()> {
+        if takeover && (old_target_enabled || old_target_active) {
+            log("Wyłączanie starszego plasmoid-updater.timer przed przejęciem jego nazwy…");
+            output(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
+        }
+        if old_previous_enabled || old_previous_active {
+            log("Wyłączanie poprzedniego bazzite-plasmoid-updater.timer…");
+            output(Command::new("systemctl").args(["--user", "disable", "--now", PREVIOUS_TIMER]))?;
+        }
+        log("Zapisywanie konfiguracji z zachowaniem dotychczasowych opcji TOML…");
+        atomic_write(&config_path, doc.to_string().as_bytes())?;
+        guarded_write_or_takeover(&service_path, &service, takeover)?;
+        guarded_write_or_takeover(&timer_path, &timer, takeover)?;
+
+        output(Command::new("systemctl").args(["--user", "daemon-reload"]))?;
+        // A persistent timer can start as soon as it is enabled: settings first.
+        settings.save(home)?;
+        if settings.automatic {
+            output(Command::new("systemctl").args(["--user", "enable", "--now", TIMER]))?;
+            log("Automatyczne aktualizacje plasmoid-updater zostały włączone.");
+        } else {
+            output(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
+            log("Automatyczne aktualizacje plasmoid-updater zostały wyłączone.");
+        }
+        Ok(())
+    })();
+
+    if let Err(error) = apply {
+        log("Konfiguracja nie powiodła się. Przywracanie poprzednich jednostek systemd…");
+        restore_units(&snapshots, log);
+        let _ = output(Command::new("systemctl").args(["--user", "daemon-reload"]));
+        if old_target_enabled || old_target_active {
+            let _ = output(Command::new("systemctl").args(["--user", "enable", "--now", TIMER]));
+        }
+        if old_previous_enabled || old_previous_active {
+            let _ = output(Command::new("systemctl").args([
                 "--user",
-                "disable",
+                "enable",
                 "--now",
-                "plasmoid-updater.timer",
-            ]))?;
+                PREVIOUS_TIMER,
+            ]));
         }
-        if let Err(error) =
-            output(Command::new("systemctl").args(["--user", "enable", "--now", TIMER]))
-        {
-            if migrated {
-                log("Nowy timer nie został włączony — próba przywrócenia starszego harmonogramu…");
-                let _ = output(Command::new("systemctl").args([
-                    "--user",
-                    "enable",
-                    "--now",
-                    "plasmoid-updater.timer",
-                ]));
-            }
-            return Err(error);
-        }
-        log("Automatyczne aktualizacje zostały włączone.");
-    } else {
-        output(Command::new("systemctl").args(["--user", "disable", "--now", TIMER]))?;
-        log("Automatyczne aktualizacje zostały wyłączone.");
+        return Err(error);
     }
     Ok(())
 }
@@ -972,5 +1097,41 @@ mod tests {
         assert!(value.contains("assume_yes = true"));
         assert!(value.contains("prompt_restart = false"));
         assert!(value.contains("excluded_patterns"));
+    }
+
+    #[test]
+    fn snapshots_and_restores_preexisting_unmanaged_units() {
+        let temp = tempfile::tempdir().unwrap();
+        let units = user_units(temp.path());
+        fs::create_dir_all(&units).unwrap();
+        let previous = "[Service]\nExecStart=/usr/bin/true\n";
+        fs::write(units.join(SERVICE), previous).unwrap();
+        assert!(unmanaged_unit_collision(temp.path()));
+        let saved = snapshot_units(&units).unwrap();
+        backup_unmanaged_units(temp.path(), &saved, &mut |_| {}).unwrap();
+        let backups = temp
+            .path()
+            .join(".config/bazzite-plasmoid-updater-gui/backups");
+        let backup = fs::read_dir(backups)
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+        assert_eq!(fs::read_to_string(backup.join(SERVICE)).unwrap(), previous);
+
+        atomic_write(
+            &units.join(SERVICE),
+            format!("{MANAGED}\n[Service]\n").as_bytes(),
+        )
+        .unwrap();
+        atomic_write(
+            &units.join(TIMER),
+            format!("{MANAGED}\n[Timer]\n").as_bytes(),
+        )
+        .unwrap();
+        restore_units(&saved, &mut |_| {});
+        assert_eq!(fs::read_to_string(units.join(SERVICE)).unwrap(), previous);
+        assert!(!units.join(TIMER).exists());
     }
 }

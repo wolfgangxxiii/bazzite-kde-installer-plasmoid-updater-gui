@@ -10,14 +10,11 @@ use std::process::ExitCode;
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.as_slice() == ["--version"] {
-        println!(
-            "bazzite-plasmoid-updater-agent {}",
-            env!("CARGO_PKG_VERSION")
-        );
+        println!("plasmoid-updater-agent {}", env!("CARGO_PKG_VERSION"));
         return ExitCode::SUCCESS;
     }
     if args.as_slice() != ["run"] {
-        eprintln!("Usage: bazzite-plasmoid-updater-agent run|--version");
+        eprintln!("Usage: plasmoid-updater-agent run|--version");
         return ExitCode::from(2);
     }
 

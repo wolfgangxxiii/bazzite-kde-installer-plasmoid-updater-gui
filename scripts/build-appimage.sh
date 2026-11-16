@@ -46,11 +46,11 @@ fi
 export APPIMAGE_EXTRACT_AND_RUN=1
 "$LINUXDEPLOY" --appdir "$APPDIR" \
   --executable "target/release/bazzite-plasmoid-updater-gui" \
-  --executable "target/release/bazzite-plasmoid-updater-agent" \
+  --executable "target/release/plasmoid-updater-agent" \
   --desktop-file "packaging/$ICON_NAME.desktop" \
   --icon-file "$ICON_PNG"
 
-test -x "$APPDIR/usr/bin/bazzite-plasmoid-updater-agent"
+test -x "$APPDIR/usr/bin/plasmoid-updater-agent"
 
 mkdir -p "$APPDIR/usr/share/glib-2.0/schemas" "$APPDIR/apprun-hooks"
 cp /usr/share/glib-2.0/schemas/*.gschema.xml \

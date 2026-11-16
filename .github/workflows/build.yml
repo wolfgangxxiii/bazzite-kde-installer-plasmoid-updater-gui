@@ -34,7 +34,7 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/bazzite-plasmoid-updater-agent --version | grep -F 'bazzite-plasmoid-updater-agent 0.3.0'
+          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.3.1'
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
@@ -63,13 +63,13 @@ jobs:
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.3.0 >/dev/null 2>&1; then
-              echo "v0.3.0 already published; use a new version tag for another release."
+            if gh release view v0.3.1 >/dev/null 2>&1; then
+              echo "v0.3.1 already published; use a new version tag for another release."
             else
-              gh release create v0.3.0 dist/*.AppImage \
+              gh release create v0.3.1 dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.3.0" \
-                --notes "Instalator i konfigurator Bazzite KDE: pełniejsza diagnostyka zależności, wykrywanie instalacji Cargo/PATH, import wykluczeń z istniejącego TOML bez nadpisywania pozostałych ustawień, kontrolowana migracja starszego timera, test końcowy i uruchamianie usługi systemd z GUI. Aktualizacje dodatków i samej binarki plasmoid-updater pozostają bezobsługowe."
+                --title "Bazzite Plasmoid Updater GUI v0.3.1" \
+                --notes "Poprawka instalatora: automatyczne aktualizacje korzystają teraz z usług plasmoid-updater.service i plasmoid-updater.timer oraz pomocniczej binarki plasmoid-updater-agent. Migracja zachowuje kopie istniejących jednostek, wyłącza poprzednie timery i próbuje przywrócić wcześniejszy stan po błędzie. Przycisk uruchomienia zgłasza potrzebę konfiguracji przed wywołaniem systemd."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

@@ -891,7 +891,10 @@ pub fn build(app: &adw::Application) {
 fn ini_value<'a>(content: &'a str, section: &str, key: &str) -> Option<&'a str> {
     let mut current_section = "";
     for line in content.lines().map(str::trim) {
-        if let Some(name) = line.strip_prefix('[').and_then(|line| line.strip_suffix(']')) {
+        if let Some(name) = line
+            .strip_prefix('[')
+            .and_then(|line| line.strip_suffix(']'))
+        {
             current_section = name.trim();
         } else if current_section == section {
             if let Some((name, value)) = line.split_once('=') {
@@ -910,7 +913,8 @@ mod cursor_tests {
 
     #[test]
     fn reads_only_the_requested_section() {
-        let ini = "[General]\ncursorTheme=Wrong\n[Mouse]\ncursorTheme = Breeze_Snow\ncursorSize=32\n";
+        let ini =
+            "[General]\ncursorTheme=Wrong\n[Mouse]\ncursorTheme = Breeze_Snow\ncursorSize=32\n";
         assert_eq!(ini_value(ini, "Mouse", "cursorTheme"), Some("Breeze_Snow"));
         assert_eq!(ini_value(ini, "Mouse", "cursorSize"), Some("32"));
         assert_eq!(ini_value(ini, "Settings", "cursorTheme"), None);
@@ -929,7 +933,11 @@ fn apply_host_cursor_theme() {
     // can otherwise return a stale Adwaita default to GTK4 AppImages.
     let on_kde = std::env::var("XDG_CURRENT_DESKTOP")
         .ok()
-        .is_some_and(|desktop| desktop.split(':').any(|name| name.eq_ignore_ascii_case("KDE")));
+        .is_some_and(|desktop| {
+            desktop
+                .split(':')
+                .any(|name| name.eq_ignore_ascii_case("KDE"))
+        });
     let kde_ini = if on_kde {
         fs::read_to_string(config_home.join("kcminputrc")).ok()
     } else {

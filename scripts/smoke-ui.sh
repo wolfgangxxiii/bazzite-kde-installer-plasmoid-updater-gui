@@ -9,20 +9,28 @@ trap 'if [[ -n "$app_pid" ]]; then kill -TERM -- "-$app_pid" 2>/dev/null || true
 capture_page() {
   local page="$1" width="$2" height="$3" label="$4"
   local window_id=""
+  local accent_config=""
+  local -a appearance_env=()
   local expand_tests=0 expand_advanced=0 expand_dashboard=0
   if [[ "$label" == narrow-automation-tests || "$label" == desktop-automation-tests ]]; then
     expand_tests=1
   elif [[ "$label" == narrow-automation-advanced ]]; then
     expand_advanced=1
-  elif [[ "$label" == narrow-dashboard-expanders ]]; then
+  elif [[ "$label" == narrow-dashboard-expanders || "$label" == desktop-dashboard-checklist || "$label" == desktop-dashboard-accent ]]; then
     expand_dashboard=1
+  fi
+
+  if [[ "$label" == desktop-dashboard-accent ]]; then
+    accent_config="$(mktemp -d)"
+    printf '[General]\nAccentColor=213,95,180\n' > "$accent_config/kdeglobals"
+    appearance_env=(XDG_CONFIG_HOME="$accent_config" XDG_CURRENT_DESKTOP=KDE)
   fi
 
   # An explicit initial page is deterministic across font themes and scaling.
   # AppImage's AppRun spawns a wrapped GUI process. A dedicated process group
   # lets us terminate the entire tree; otherwise the next GTK instance exits
   # after forwarding activation to the still-running first window.
-  setsid env BAZZITE_GUI_SMOKE_PAGE="$page" \
+  setsid env "${appearance_env[@]}" BAZZITE_GUI_SMOKE_PAGE="$page" \
     BAZZITE_GUI_SMOKE_EXPAND_TESTS="$expand_tests" \
     BAZZITE_GUI_SMOKE_EXPAND_ADVANCED="$expand_advanced" \
     BAZZITE_GUI_SMOKE_EXPAND_DASHBOARD="$expand_dashboard" \
@@ -75,6 +83,9 @@ capture_page() {
   kill -TERM -- "-$app_pid" 2>/dev/null || true
   wait "$app_pid" 2>/dev/null || true
   app_pid=""
+  if [[ -n "$accent_config" ]]; then
+    rm -r -- "$accent_config"
+  fi
   sleep 0.3
 }
 
@@ -87,5 +98,7 @@ capture_page automation 540 720 narrow-automation
 capture_page automation 540 720 narrow-automation-tests
 capture_page automation 540 720 narrow-automation-advanced
 capture_page dashboard 540 720 narrow-dashboard-expanders
+capture_page dashboard 1020 740 desktop-dashboard-checklist
+capture_page dashboard 1020 740 desktop-dashboard-accent
 capture_page automation 1020 740 desktop-automation-tests
 capture_page installation 540 720 narrow-installation

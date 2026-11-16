@@ -39,7 +39,7 @@ enum Message {
 
 #[derive(Clone)]
 struct UiParts {
-    status: gtk::Label,
+    status: gtk::Box,
     automation: gtk::Label,
     output: gtk::TextBuffer,
     toast: adw::ToastOverlay,
@@ -162,7 +162,7 @@ fn apply_status(
     parts
         .repair_button
         .set_sensitive(repair_needed && !parts.busy.get());
-    parts.status.set_text(status);
+    render_status_checks(&parts.status, status);
     parts.automation.set_text(automation);
 }
 
@@ -172,6 +172,63 @@ fn append_log(buffer: &gtk::TextBuffer, message: &str) {
         buffer.insert(&mut end, "\n");
     }
     buffer.insert(&mut end, message);
+}
+
+// A diagnostic item gets its own row and semantic colour. In particular, the
+// seven environment checks must not run together in two long paragraphs.
+fn diagnostic_row(text: &str) -> gtk::Box {
+    let row = gtk::Box::new(gtk::Orientation::Horizontal, 10);
+    row.add_css_class("diagnostic-row");
+    let (symbol, body, state) = if let Some(label) = text.strip_prefix("✓ ") {
+        ("✓", label, "diagnostic-pass")
+    } else if let Some(label) = text.strip_prefix("! ") {
+        ("✕", label, "diagnostic-fail")
+    } else {
+        ("•", text, "diagnostic-neutral")
+    };
+    let marker = gtk::Label::new(Some(symbol));
+    marker.add_css_class(state);
+    marker.add_css_class("heading");
+    marker.set_width_chars(2);
+    marker.set_valign(gtk::Align::Start);
+    row.append(&marker);
+
+    let label = gtk::Label::new(Some(body));
+    label.set_xalign(0.0);
+    label.set_hexpand(true);
+    label.set_wrap(true);
+    label.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    label.set_selectable(true);
+    if state != "diagnostic-neutral" {
+        label.add_css_class(state);
+    }
+    row.append(&label);
+    row
+}
+
+fn render_status_checks(container: &gtk::Box, report: &str) {
+    while let Some(child) = container.first_child() {
+        container.remove(&child);
+    }
+    for (index, line) in report.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        // Split checklist rows, configuration/agent, and timer/next-run into
+        // independent items; keep paths and long values intact and wrappable.
+        let grouped = index < 2
+            || ((line.starts_with("✓ ") || line.starts_with("! ")) && line.contains(" · "))
+            || line.starts_with("Konfiguracja:")
+            || line.starts_with("Configuration:")
+            || line.starts_with("Timer:");
+        if grouped {
+            for entry in line.split(" · ") {
+                container.append(&diagnostic_row(entry));
+            }
+        } else {
+            container.append(&diagnostic_row(line));
+        }
+    }
 }
 
 fn clear_list(list: &gtk::ListBox) {
@@ -560,6 +617,7 @@ enum UiIcon {
     ChevronDown,
     ChevronUp,
     Warning,
+    ExternalLink,
 }
 
 fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
@@ -694,6 +752,18 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
                 cr.line_to(12.0, 14.0);
                 cr.move_to(12.0, 18.0);
                 cr.line_to(12.0, 18.1);
+            }
+            UiIcon::ExternalLink => {
+                cr.move_to(12.0, 4.0);
+                cr.line_to(20.0, 4.0);
+                cr.line_to(20.0, 12.0);
+                cr.move_to(20.0, 4.0);
+                cr.line_to(10.0, 14.0);
+                cr.move_to(17.0, 14.0);
+                cr.line_to(17.0, 20.0);
+                cr.line_to(4.0, 20.0);
+                cr.line_to(4.0, 7.0);
+                cr.line_to(10.0, 7.0);
             }
         }
         let _ = cr.stroke();
@@ -901,6 +971,7 @@ fn switch_row(title: &str, subtitle: &str, active: bool) -> adw::SwitchRow {
 
 fn button(label: &str, suggested: bool) -> gtk::Button {
     let button = gtk::Button::new();
+    button.add_css_class("theme-action");
     // Reserve a readable action width in horizontal cards; the narrow
     // breakpoint expands the button to the full card width instead.
     button.set_width_request(160);
@@ -986,9 +1057,142 @@ fn ini_value<'a>(content: &'a str, section: &str, key: &str) -> Option<&'a str> 
     None
 }
 
+fn parse_accent_color(value: &str) -> Option<(u8, u8, u8)> {
+    let value = value.trim().trim_matches('"');
+    if let Some(hex) = value.strip_prefix('#') {
+        if hex.len() != 6 {
+            return None;
+        }
+        return Some((
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+        ));
+    }
+    let mut rgb = value.split(',').map(|part| part.trim().parse::<u8>().ok());
+    let result = (rgb.next()??, rgb.next()??, rgb.next()??);
+    rgb.next().is_none().then_some(result)
+}
+
+fn host_accent_color() -> Option<(u8, u8, u8)> {
+    let config = std::env::var_os("XDG_CONFIG_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".config")))?;
+    let kdeglobals = fs::read_to_string(config.join("kdeglobals")).ok()?;
+    ini_value(&kdeglobals, "General", "AccentColor")
+        .and_then(parse_accent_color)
+        .or_else(|| {
+            ini_value(&kdeglobals, "Colors:Selection", "BackgroundNormal")
+                .and_then(parse_accent_color)
+        })
+}
+
+fn contrast_text_color((red, green, blue): (u8, u8, u8)) -> &'static str {
+    let linear = |value: u8| {
+        let channel = f64::from(value) / 255.0;
+        if channel <= 0.04045 {
+            channel / 12.92
+        } else {
+            ((channel + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    let luminance = 0.2126 * linear(red) + 0.7152 * linear(green) + 0.0722 * linear(blue);
+    if luminance > 0.179 {
+        "#161616"
+    } else {
+        "#ffffff"
+    }
+}
+
+thread_local! {
+    static APP_STYLE_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
+}
+
+fn apply_host_accent_theme() {
+    // Base styles remain neutral and legible in both dark and light GTK themes.
+    // Only the accent is taken from KDE; don't hard-code Bazzite blue.
+    let mut css = String::from(
+        r#"
+        .app-header-title { font-size: 16px; font-weight: 750; letter-spacing: .15px; }
+        .app-header-subtitle { font-size: 11px; opacity: .73; }
+        .app-version-badge { border-radius: 10px; padding: 1px 7px;
+                             background-color: rgba(127,127,127,.15); font-size: 10px; font-weight: 700; }
+        .navigation-heading { font-size: 13px; font-weight: 750; }
+        .navigation-caption { font-size: 10px; letter-spacing: .6px; opacity: .68; }
+        .navigation-rule { opacity: .45; }
+        button.theme-action { border-radius: 10px; min-height: 36px; }
+        button.upstream-link { border-radius: 12px; min-height: 36px; padding: 5px 14px;
+                               background-color: rgba(127,127,127,.12);
+                               border: 1px solid rgba(127,127,127,.25); }
+        .diagnostic-row { border-radius: 7px; background-color: rgba(127,127,127,.075);
+                          padding: 7px 10px; }
+        .diagnostic-pass { color: @success_color; }
+        .diagnostic-fail { color: @error_color; }
+        .diagnostic-neutral { opacity: .78; }
+        "#,
+    );
+    if let Some((red, green, blue)) = host_accent_color() {
+        let foreground = contrast_text_color((red, green, blue));
+        let (hover_red, hover_green, hover_blue) = if foreground == "#161616" {
+            (
+                red.saturating_sub(16),
+                green.saturating_sub(16),
+                blue.saturating_sub(16),
+            )
+        } else {
+            (
+                red.saturating_add(16),
+                green.saturating_add(16),
+                blue.saturating_add(16),
+            )
+        };
+        css.push_str(&format!(
+            r#"
+            button.theme-action.suggested-action, button.upstream-link {{
+                background-color: rgb({red},{green},{blue});
+                color: {foreground};
+                border: 1px solid rgba({red},{green},{blue},.8);
+            }}
+            button.theme-action.suggested-action:hover, button.upstream-link:hover {{
+                background-color: rgb({hover_red},{hover_green},{hover_blue});
+            }}
+            button.theme-action:not(.suggested-action) {{
+                border: 1px solid rgba({red},{green},{blue},.40);
+            }}
+            button.theme-action:not(.suggested-action):hover {{
+                background-color: rgba({red},{green},{blue},.13);
+            }}
+            button.header-action:hover {{
+                background-color: rgba({red},{green},{blue},.20);
+            }}
+            switch:checked {{ background-color: rgb({red},{green},{blue}); }}
+            .navigation-sidebar row:selected {{
+                background-color: rgba({red},{green},{blue},.20);
+            }}
+            "#,
+        ));
+    }
+    let Some(display) = gtk::gdk::Display::default() else {
+        return;
+    };
+    APP_STYLE_PROVIDER.with(|cached| {
+        let mut cached = cached.borrow_mut();
+        let provider = cached.get_or_insert_with(|| {
+            let provider = gtk::CssProvider::new();
+            gtk::style_context_add_provider_for_display(
+                &display,
+                &provider,
+                gtk::STYLE_PROVIDER_PRIORITY_APPLICATION,
+            );
+            provider
+        });
+        provider.load_from_data(&css);
+    });
+}
+
 #[cfg(test)]
-mod cursor_tests {
-    use super::ini_value;
+mod appearance_tests {
+    use super::{contrast_text_color, ini_value, parse_accent_color};
 
     #[test]
     fn reads_only_the_requested_section() {
@@ -997,6 +1201,16 @@ mod cursor_tests {
         assert_eq!(ini_value(ini, "Mouse", "cursorTheme"), Some("Breeze_Snow"));
         assert_eq!(ini_value(ini, "Mouse", "cursorSize"), Some("32"));
         assert_eq!(ini_value(ini, "Settings", "cursorTheme"), None);
+    }
+
+    #[test]
+    fn reads_kde_accent_rgb_and_hex() {
+        assert_eq!(parse_accent_color("61, 174, 233"), Some((61, 174, 233)));
+        assert_eq!(parse_accent_color("#3daee9"), Some((61, 174, 233)));
+        assert_eq!(parse_accent_color("300,0,0"), None);
+        assert_eq!(parse_accent_color("0,0,0,1"), None);
+        assert_eq!(contrast_text_color((255, 250, 255)), "#161616");
+        assert_eq!(contrast_text_color((25, 40, 70)), "#ffffff");
     }
 }
 
@@ -1054,6 +1268,7 @@ fn apply_host_cursor_theme() {
 
 fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Option<ViewState>) {
     apply_host_cursor_theme();
+    apply_host_accent_theme();
     let initial_width = initial_state
         .as_ref()
         .map_or(1020, |state| state.width.max(420));
@@ -1075,14 +1290,26 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let header = adw::HeaderBar::new();
     toolbar.add_top_bar(&header);
 
-    let header_title = adw::WindowTitle::new(
-        "Plasmoid Updater",
-        &format!(
-            "{} · v{}",
-            t("Instalator dla Bazzite KDE", "Installer for Bazzite KDE"),
-            env!("CARGO_PKG_VERSION")
-        ),
-    );
+    let header_title = gtk::Box::new(gtk::Orientation::Vertical, 1);
+    header_title.set_halign(gtk::Align::Center);
+    header_title.set_valign(gtk::Align::Center);
+    let header_main = gtk::Box::new(gtk::Orientation::Horizontal, 7);
+    header_main.set_halign(gtk::Align::Center);
+    let product_name = gtk::Label::new(Some("Plasmoid Updater"));
+    product_name.add_css_class("app-header-title");
+    header_main.append(&product_name);
+    let version_badge = gtk::Label::new(Some(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+    version_badge.add_css_class("app-version-badge");
+    header_main.append(&version_badge);
+    header_title.append(&header_main);
+    let header_subtitle = gtk::Label::new(Some(t(
+        "Aktualizacje dodatków · Bazzite KDE",
+        "Addon updates · Bazzite KDE",
+    )));
+    header_subtitle.add_css_class("app-header-subtitle");
+    header_subtitle.set_ellipsize(gtk::pango::EllipsizeMode::End);
+    header_subtitle.set_max_width_chars(31);
+    header_title.append(&header_subtitle);
     header.set_title_widget(Some(&header_title));
     let navigation_toggle = gtk::ToggleButton::new();
     navigation_toggle.set_child(Some(&vector_icon(UiIcon::Menu)));
@@ -1098,6 +1325,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     refresh_icon.set_halign(gtk::Align::Center);
     refresh_icon.set_valign(gtk::Align::Center);
     refresh.set_child(Some(&refresh_icon));
+    refresh.add_css_class("header-action");
     refresh.set_size_request(36, 36);
     refresh.set_valign(gtk::Align::Center);
     refresh.set_tooltip_text(Some(t(
@@ -1167,15 +1395,35 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         row.set_child(Some(&item));
         sidebar.append(&row);
     }
-    let navigation = gtk::Box::new(gtk::Orientation::Vertical, 8);
-    navigation.set_margin_top(20);
-    let navigation_heading = gtk::Label::new(Some(t("NAWIGACJA", "NAVIGATION")));
-    navigation_heading.add_css_class("caption");
-    navigation_heading.add_css_class("dim-label");
+    let navigation = gtk::Box::new(gtk::Orientation::Vertical, 10);
+    navigation.set_margin_top(18);
+    let nav_header = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    nav_header.set_margin_start(18);
+    nav_header.set_margin_end(14);
+    nav_header.set_margin_bottom(6);
+    let nav_heading_line = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+    let nav_icon = vector_icon(UiIcon::Menu);
+    nav_icon.add_css_class("dim-label");
+    nav_heading_line.append(&nav_icon);
+    let navigation_heading = gtk::Label::new(Some(t("Nawigacja", "Navigation")));
+    navigation_heading.add_css_class("navigation-heading");
     navigation_heading.set_xalign(0.0);
-    navigation_heading.set_margin_start(16);
-    navigation_heading.set_margin_bottom(10);
-    navigation.append(&navigation_heading);
+    navigation_heading.set_hexpand(true);
+    nav_heading_line.append(&navigation_heading);
+    let nav_count = gtk::Label::new(Some("05"));
+    nav_count.add_css_class("app-version-badge");
+    nav_heading_line.append(&nav_count);
+    nav_header.append(&nav_heading_line);
+    let nav_caption = gtk::Label::new(Some(t("SEKCJE APLIKACJI", "APP SECTIONS")));
+    nav_caption.add_css_class("navigation-caption");
+    nav_caption.set_xalign(0.0);
+    nav_header.append(&nav_caption);
+    navigation.append(&nav_header);
+    let nav_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
+    nav_separator.add_css_class("navigation-rule");
+    nav_separator.set_margin_start(16);
+    nav_separator.set_margin_end(16);
+    navigation.append(&nav_separator);
     let nav_scroll = gtk::ScrolledWindow::builder()
         .vexpand(true)
         .hscrollbar_policy(gtk::PolicyType::Never)
@@ -1288,14 +1536,10 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         ),
         &diagnose_button,
     ));
-    let status = gtk::Label::new(Some(&backend::status_localized(english())));
-    status.set_xalign(0.0);
-    status.set_wrap(true);
-    status.set_wrap_mode(gtk::pango::WrapMode::WordChar);
-    status.set_selectable(true);
+    let status = gtk::Box::new(gtk::Orientation::Vertical, 5);
+    render_status_checks(&status, &backend::status_localized(english()));
     status.set_margin_top(8);
     status.set_margin_bottom(8);
-    status.add_css_class("caption");
     let diagnostics = expander_card(
         t("Szczegóły stanu i ścieżki", "Status details and paths"),
         &status,
@@ -1303,14 +1547,20 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     );
     environment.add(&diagnostics);
     dashboard.append(&environment);
-    let footer = gtk::LinkButton::with_label(
-        backend::UPSTREAM,
-        t(
-            "Projekt źródłowy plasmoid-updater",
-            "Upstream plasmoid-updater project",
-        ),
-    );
+    let footer = gtk::LinkButton::new(backend::UPSTREAM);
+    footer.add_css_class("upstream-link");
+    let footer_content = gtk::Box::new(gtk::Orientation::Horizontal, 9);
+    footer_content.append(&vector_icon(UiIcon::ExternalLink));
+    let footer_title = gtk::Label::new(Some(t(
+        "Projekt źródłowy plasmoid-updater",
+        "Upstream plasmoid-updater project",
+    )));
+    footer_title.set_wrap(true);
+    footer_content.append(&footer_title);
+    footer.set_child(Some(&footer_content));
+    footer.set_tooltip_text(Some(backend::UPSTREAM));
     footer.set_halign(gtk::Align::Start);
+    footer.set_margin_top(10);
     dashboard.append(&footer);
     add_page(&stack, "dashboard", t("Pulpit", "Dashboard"), &dashboard);
 
@@ -1499,7 +1749,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let initial = match backend::home().and_then(|h| backend::initial_settings(&h)) {
         Ok(settings) => settings,
         Err(error) => {
-            status.set_text(&format!(
+            render_status_checks(&status, &format!(
                 "{}\n{}: {error:#}",
                 backend::status_localized(english()),
                 t("Ustawienia", "Settings")
@@ -1863,6 +2113,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     refresh_status(&parts);
     let refresh_parts = parts.clone();
     refresh.connect_clicked(move |_| {
+        apply_host_accent_theme();
         refresh_status(&refresh_parts);
     });
     let parts_language = parts.clone();

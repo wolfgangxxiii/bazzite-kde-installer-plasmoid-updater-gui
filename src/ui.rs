@@ -100,15 +100,17 @@ fn refresh_status(parts: &UiParts) {
         let _ = sender.send((summary, status, automation));
     });
     let parts = parts.clone();
-    glib::timeout_add_local(Duration::from_millis(120), move || match receiver.try_recv() {
-        Ok((summary, status, automation)) => {
-            if parts.status_generation.get() == generation {
-                apply_status(&parts, summary, &status, &automation);
+    glib::timeout_add_local(Duration::from_millis(120), move || {
+        match receiver.try_recv() {
+            Ok((summary, status, automation)) => {
+                if parts.status_generation.get() == generation {
+                    apply_status(&parts, summary, &status, &automation);
+                }
+                glib::ControlFlow::Break
             }
-            glib::ControlFlow::Break
+            Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
+            Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
         }
-        Err(TryRecvError::Empty) => glib::ControlFlow::Continue,
-        Err(TryRecvError::Disconnected) => glib::ControlFlow::Break,
     });
 }
 
@@ -122,11 +124,13 @@ fn apply_status(
         && summary.agent_version.as_deref() != Some(env!("CARGO_PKG_VERSION"));
     parts.environment_value.remove_css_class("success");
     parts.environment_value.remove_css_class("warning");
-    parts.environment_value.add_css_class(if summary.environment_ready {
-        "success"
-    } else {
-        "warning"
-    });
+    parts
+        .environment_value
+        .add_css_class(if summary.environment_ready {
+            "success"
+        } else {
+            "warning"
+        });
     parts
         .environment_value
         .set_text(if summary.environment_ready {

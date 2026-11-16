@@ -30,8 +30,8 @@ Program **nie** aktualizuje samego Bazzite, Flatpaków, sterowników ani pakiet�
 
 ## Instalacja AppImage
 
-1. Otwórz [GitHub Actions → Build GTK4 AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/actions/workflows/build.yml) i pobierz artefakt ostatniej pomyślnej kompilacji. Wydania oznaczone tagiem są także publikowane w [Releases](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases).
-2. Rozpakuj artefakt ZIP, a następnie uruchom:
+1. **[Pobierz gotowy AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage)** z zakładki [Releases](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases) (nie trzeba pobierać archiwum z kodem źródłowym).
+2. W katalogu z pobranym plikiem uruchom:
 
    ```bash
    chmod +x Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage

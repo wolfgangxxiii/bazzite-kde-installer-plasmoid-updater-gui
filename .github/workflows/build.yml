@@ -49,12 +49,23 @@ jobs:
           name: bazzite-plasmoid-updater-gui-appimage
           path: dist/*.AppImage
           if-no-files-found: error
-      - name: Publish release
-        if: startsWith(github.ref, 'refs/tags/v')
+      - name: Publish AppImage in GitHub Releases
+        if: startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'push' && github.ref == 'refs/heads/main')
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
+          if [ "$GITHUB_REF" = "refs/heads/main" ]; then
+            # Publish the initial stable download on the first successful build.
+            # Future pushes do not silently replace an already published v0.1.0.
+            if gh release view v0.1.0 >/dev/null 2>&1; then
+              echo "v0.1.0 already published; use a new version tag for another release."
+            else
+              gh release create v0.1.0 dist/*.AppImage \
+                --target "$GITHUB_SHA" \
+                --title "Bazzite Plasmoid Updater GUI v0.1.0" \
+                --notes "Pierwsze stabilne wydanie AppImage dla Bazzite KDE Plasma 6 (x86_64). Instalacja i weryfikacja plasmoid-updater, konfiguracja GUI i automatyzacja aktualizacji przez systemd --user."
+            fi
+          elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber
           else
             gh release create "$GITHUB_REF_NAME" dist/*.AppImage --generate-notes --verify-tag

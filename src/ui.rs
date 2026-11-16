@@ -862,7 +862,14 @@ fn add_page(stack: &gtk::Stack, key: &str, title: &str, content: &gtk::Box) {
 }
 
 pub fn build(app: &adw::Application) {
-    build_with_page(app, "dashboard", None);
+    // CI can open every page without depending on sidebar coordinates,
+    // which vary with GTK font scaling and accessibility settings.
+    let smoke_page = std::env::var("BAZZITE_GUI_SMOKE_PAGE").unwrap_or_default();
+    let initial_page = match smoke_page.as_str() {
+        "installation" | "addons" | "automation" | "journal" => smoke_page.as_str(),
+        _ => "dashboard",
+    };
+    build_with_page(app, initial_page, None);
 }
 
 fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Option<ViewState>) {
@@ -889,7 +896,11 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
 
     let header_title = adw::WindowTitle::new(
         "Plasmoid Updater",
-        t("Instalator dla Bazzite KDE", "Installer for Bazzite KDE"),
+        &format!(
+            "{} · v{}",
+            t("Instalator dla Bazzite KDE", "Installer for Bazzite KDE"),
+            env!("CARGO_PKG_VERSION")
+        ),
     );
     header.set_title_widget(Some(&header_title));
     let navigation_toggle = gtk::ToggleButton::new();
@@ -1000,6 +1011,11 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         if toggle_for_revealer.is_active() != view.shows_sidebar() {
             toggle_for_revealer.set_active(view.shows_sidebar());
         }
+    });
+    // On narrow screens the sidebar overlays the content. Automatically
+    // close it when entering the collapsed layout so controls stay readable.
+    split_view.connect_collapsed_notify(move |view| {
+        view.set_show_sidebar(!view.is_collapsed());
     });
 
     let split_for_page = split_view.clone();
@@ -1290,7 +1306,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     behavior_group.set_title(t("Dodatki i powiadomienia", "Addons and notifications"));
     let migration_group = adw::PreferencesGroup::new();
     let apply_group = adw::PreferencesGroup::new();
-    apply_group.set_title(t("Zapis i testowanie", "Save and test"));
+    apply_group.set_title(t("Testowanie", "Testing"));
     let initial = match backend::home().and_then(|h| backend::initial_settings(&h)) {
         Ok(settings) => settings,
         Err(error) => {
@@ -1422,25 +1438,32 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     );
     exclusions_card.append(&exclusions);
     behavior_group.add(&exclusions_card);
-    let unsaved = gtk::Label::new(Some(t(
-        "Niezapisane zmiany — najpierw kliknij «Zapisz i zastosuj».",
-        "Unsaved changes — click Save and apply before updating.",
-    )));
+    let unsaved = gtk::Label::new(Some(t("Niezapisane zmiany", "Unsaved changes")));
     unsaved.add_css_class("warning");
     unsaved.set_xalign(0.0);
     unsaved.set_wrap(true);
     unsaved.set_visible(false);
-    apply_group.add(&unsaved);
     let save_button = button(t("Zapisz i zastosuj", "Save and apply"), true);
-    let save_row = action_row(
-        t("Zapisz ustawienia", "Save settings"),
-        t(
-            "Zapisuje TOML i włącza lub wyłącza timer systemd użytkownika",
-            "Saves TOML and enables or disables your user systemd timer",
-        ),
-        &save_button,
-    );
-    apply_group.add(&save_row);
+    // The save action must never disappear among scrolled preference widgets.
+    // Keep it in a persistent footer, visible only on the Automation page.
+    let save_bar = gtk::Box::new(gtk::Orientation::Horizontal, 12);
+    save_bar.add_css_class("toolbar");
+    save_bar.set_margin_start(14);
+    save_bar.set_margin_end(14);
+    save_bar.set_margin_top(8);
+    save_bar.set_margin_bottom(8);
+    let save_spacer = gtk::Box::new(gtk::Orientation::Horizontal, 0);
+    save_spacer.set_hexpand(true);
+    save_bar.append(&unsaved);
+    save_bar.append(&save_spacer);
+    save_bar.append(&save_button);
+    toolbar.add_bottom_bar(&save_bar);
+    save_bar.set_visible(stack.visible_child_name().as_deref() == Some("automation"));
+    let save_bar_for_navigation = save_bar.clone();
+    stack.connect_visible_child_name_notify(move |stack| {
+        save_bar_for_navigation
+            .set_visible(stack.visible_child_name().as_deref() == Some("automation"));
+    });
 
     let test_button = button(t("Przetestuj", "Test"), false);
     let tests = gtk::Box::new(gtk::Orientation::Vertical, 6);

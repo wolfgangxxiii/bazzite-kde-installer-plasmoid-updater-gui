@@ -24,6 +24,8 @@ const TIMER: &str = "plasmoid-updater.timer";
 const PREVIOUS_TIMER: &str = "bazzite-plasmoid-updater.timer";
 const AGENT: &str = "plasmoid-updater-agent";
 const MANAGED: &str = "# Managed by Bazzite Plasmoid Updater GUI";
+// Retry only transient KDE Store connectivity problems, not command/permission errors.
+const NETWORK_RETRY_DELAYS: &[u64] = &[3, 9];
 
 thread_local! {
     static CANCEL_TOKEN: RefCell<Option<Arc<AtomicBool>>> = const { RefCell::new(None) };
@@ -264,6 +266,11 @@ pub struct DashboardSummary {
     pub agent_version: Option<String>,
     pub agent_managed: bool,
     pub timer_active: bool,
+    pub last_service_failed: bool,
+}
+
+fn service_result_failed(result: &str) -> bool {
+    !matches!(result, "success" | "unknown" | "")
 }
 
 pub fn dashboard_summary() -> DashboardSummary {
@@ -288,6 +295,9 @@ pub fn dashboard_summary() -> DashboardSummary {
         agent_managed: is_managed_unit(&user_units(&home).join(SERVICE))
             && is_managed_unit(&user_units(&home).join(TIMER)),
         timer_active: user_unit_state(TIMER, "is-active"),
+        last_service_failed: unit_property(SERVICE, "Result")
+            .as_deref()
+            .is_some_and(service_result_failed),
     }
 }
 
@@ -510,7 +520,7 @@ pub fn automation_report_localized(english: bool) -> String {
         let result = unit_property(SERVICE, "Result").unwrap_or_else(|| "unknown".into());
         if !english && result == "success" {
             "sukces".into()
-        } else if !english && result == "failed" {
+        } else if !english && service_result_failed(&result) {
             "błąd".into()
         } else {
             result
@@ -1078,6 +1088,69 @@ fn run_update_cycle(home: &Path, settings: &Settings, log: &mut dyn FnMut(&str))
     }
 }
 
+fn is_transient_network_failure(result: &Output) -> bool {
+    if result.status.success() {
+        return false;
+    }
+    let message = format!(
+        "{}\n{}",
+        String::from_utf8_lossy(&result.stdout),
+        String::from_utf8_lossy(&result.stderr)
+    )
+    .to_ascii_lowercase();
+    [
+        "network request failed",
+        "timed out",
+        "timeout",
+        "could not resolve host",
+        "temporary failure in name resolution",
+        "dns error",
+        "connection reset",
+        "connection refused",
+        "connection closed",
+        "502 bad gateway",
+        "503 service unavailable",
+        "504 gateway timeout",
+        "status: 429",
+        "status: 502",
+        "status: 503",
+        "status: 504",
+    ]
+    .iter()
+    .any(|needle| message.contains(needle))
+}
+
+fn wait_before_retry(seconds: u64) -> Result<()> {
+    // Keep GUI cancellation responsive while a network retry is pending.
+    for _ in 0..seconds * 4 {
+        let cancelled = CANCEL_TOKEN.with(|token| {
+            token
+                .borrow()
+                .as_ref()
+                .is_some_and(|value| value.load(Ordering::Relaxed))
+        });
+        anyhow::ensure!(!cancelled, "Anulowano operację na żądanie użytkownika");
+        thread::sleep(Duration::from_millis(250));
+    }
+    Ok(())
+}
+
+fn with_network_retries(
+    mut run: impl FnMut() -> Result<Output>,
+    mut on_retry: impl FnMut(usize, u64),
+    mut wait: impl FnMut(u64) -> Result<()>,
+) -> Result<Output> {
+    for (index, &delay) in NETWORK_RETRY_DELAYS.iter().enumerate() {
+        let result = run()?;
+        if !is_transient_network_failure(&result) {
+            return Ok(result);
+        }
+        on_retry(index + 2, delay);
+        wait(delay)?;
+    }
+    run()
+}
+
 fn run_updater(home: &Path, args: &[&str], check: bool, log: &mut dyn FnMut(&str)) -> Result<()> {
     let binary = find_existing_updater(home)
         .map(|(path, _)| path)
@@ -1085,12 +1158,22 @@ fn run_updater(home: &Path, args: &[&str], check: bool, log: &mut dyn FnMut(&str
     if args.first() == Some(&"update") && !bsdtar_exists(home) {
         bail!("Brakuje bsdtar. Zainstaluj: brew install libarchive");
     }
-    let result = capture(
-        Command::new(binary)
-            .arg("--skip-plasma-detection")
-            .args(args)
-            .env("PATH", user_path(home))
-            .stdin(Stdio::null()),
+    let result = with_network_retries(
+        || {
+            capture(
+                Command::new(&binary)
+                    .arg("--skip-plasma-detection")
+                    .args(args)
+                    .env("PATH", user_path(home))
+                    .stdin(Stdio::null()),
+            )
+        },
+        |attempt, seconds| {
+            log(&format!(
+                "KDE Store jest chwilowo niedostępny. Ponawianie {attempt}/3 za {seconds} s…"
+            ));
+        },
+        wait_before_retry,
     )
     .context("Nie udało się uruchomić plasmoid-updater")?;
     let stdout = String::from_utf8_lossy(&result.stdout);
@@ -1127,14 +1210,20 @@ fn updater_output(home: &Path, args: &[&str], accepted_codes: &[i32]) -> Result<
     let binary = find_existing_updater(home)
         .map(|(path, _)| path)
         .context("Najpierw zainstaluj plasmoid-updater")?;
-    let result = capture(
-        Command::new(binary)
-            .arg("--skip-plasma-detection")
-            .args(args)
-            .env("PATH", user_path(home))
-            .env("NO_COLOR", "1")
-            .env("CLICOLOR", "0")
-            .stdin(Stdio::null()),
+    let result = with_network_retries(
+        || {
+            capture(
+                Command::new(&binary)
+                    .arg("--skip-plasma-detection")
+                    .args(args)
+                    .env("PATH", user_path(home))
+                    .env("NO_COLOR", "1")
+                    .env("CLICOLOR", "0")
+                    .stdin(Stdio::null()),
+            )
+        },
+        |_, _| {},
+        wait_before_retry,
     )
     .context("Nie udało się uruchomić plasmoid-updater")?;
     if !result.status.success()
@@ -1655,6 +1744,88 @@ fn save_configuration(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::process::ExitStatusExt;
+
+    fn fake_updater_output(code: i32, stderr: &str) -> Output {
+        Output {
+            status: std::process::ExitStatus::from_raw(code << 8),
+            stdout: Vec::new(),
+            stderr: stderr.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn retries_a_transient_kde_store_outage_then_succeeds() {
+        let mut attempts = 0;
+        let mut retries = Vec::new();
+        let mut waits = Vec::new();
+        let result = with_network_retries(
+            || {
+                attempts += 1;
+                Ok(if attempts < 3 {
+                    fake_updater_output(2, "error: network request failed for api.kde-look.org")
+                } else {
+                    fake_updater_output(0, "")
+                })
+            },
+            |attempt, seconds| retries.push((attempt, seconds)),
+            |seconds| {
+                waits.push(seconds);
+                Ok(())
+            },
+        )
+        .unwrap();
+        assert!(result.status.success());
+        assert_eq!(attempts, 3);
+        assert_eq!(retries, vec![(2, 3), (3, 9)]);
+        assert_eq!(waits, vec![3, 9]);
+    }
+
+    #[test]
+    fn permanent_outage_stops_after_three_attempts() {
+        let mut attempts = 0;
+        let result = with_network_retries(
+            || {
+                attempts += 1;
+                Ok(fake_updater_output(2, "connection timed out"))
+            },
+            |_, _| {},
+            |_| Ok(()),
+        )
+        .unwrap();
+        assert_eq!(attempts, 3);
+        assert!(!result.status.success());
+    }
+
+    #[test]
+    fn invalid_arguments_and_tls_errors_are_not_retried() {
+        for message in [
+            "error: unexpected argument '--json' found",
+            "certificate verify failed",
+            "permission denied",
+        ] {
+            let mut attempts = 0;
+            let result = with_network_retries(
+                || {
+                    attempts += 1;
+                    Ok(fake_updater_output(2, message))
+                },
+                |_, _| panic!("No retry expected"),
+                |_| panic!("No delay expected"),
+            )
+            .unwrap();
+            assert_eq!(attempts, 1);
+            assert!(!result.status.success());
+        }
+    }
+
+    #[test]
+    fn failed_service_results_are_not_reported_as_healthy() {
+        assert!(!service_result_failed("success"));
+        assert!(!service_result_failed("unknown"));
+        assert!(service_result_failed("exit-code"));
+        assert!(service_result_failed("timeout"));
+    }
 
     #[test]
     fn systemd_timestamp_drops_english_weekday() {

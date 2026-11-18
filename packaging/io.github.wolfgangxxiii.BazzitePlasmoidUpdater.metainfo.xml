@@ -15,6 +15,7 @@
     <binary>bazzite-plasmoid-updater-gui</binary>
   </provides>
   <releases>
+    <release version="0.5.12" date="2026-11-18" />
     <release version="0.5.3" date="2026-11-16" />
     <release version="0.5.2" date="2026-11-16" />
     <release version="0.5.1" date="2026-11-16" />

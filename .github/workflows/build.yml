@@ -111,25 +111,5 @@ jobs:
           else
             gh release create "$GITHUB_REF_NAME" dist/*.AppImage --generate-notes --verify-tag
           fi
-      - name: Remove archived v0.x releases and tags (one-time cleanup)
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Never remove earlier downloads until the tested 1.0 AppImage exists.
-          gh release view v1.0.0 --json assets --jq '.assets[].name' \
-            | grep -Fx 'Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage'
-          old_tags=(
-            v0.1.0 v0.2.0 v0.3.0 v0.3.1 v0.4.0
-            v0.5.0 v0.5.1 v0.5.2 v0.5.3 v0.5.4
-            v0.5.5 v0.5.6 v0.5.7 v0.5.8 v0.5.9
-            v0.5.10 v0.5.11 v0.5.12
-          )
-          for tag in "${old_tags[@]}"; do
-            if gh release view "$tag" >/dev/null 2>&1; then
-              echo "Removing archived release and tag: $tag"
-              gh release delete "$tag" --yes --cleanup-tag
-            fi
-          done
     permissions:
       contents: write

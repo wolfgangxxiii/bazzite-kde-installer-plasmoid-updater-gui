@@ -1039,7 +1039,9 @@ fn stage_and_install_updater(binary: &Path, target: &Path) -> Result<()> {
     let staged = staged.into_temp_path();
     checked_updater_version(staged.as_ref())
         .context("Pobrana binarka nie odpowiada na --version — nie zastąpiono poprzedniej")?;
-    staged.persist(target).context("Nie można zastąpić programu")?;
+    staged
+        .persist(target)
+        .context("Nie można zastąpić programu")?;
     Ok(())
 }
 
@@ -1879,7 +1881,10 @@ mod tests {
 
         let error = stage_and_install_updater(&downloaded, &installed).unwrap_err();
         assert!(error.to_string().contains("nie odpowiada na --version"));
-        assert_eq!(fs::read_to_string(&installed).unwrap(), "existing installation");
+        assert_eq!(
+            fs::read_to_string(&installed).unwrap(),
+            "existing installation"
+        );
     }
 
     #[test]

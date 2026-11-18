@@ -2071,8 +2071,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let about = page(
         t("O programie", "About"),
         t(
-            "Informacje o aplikacji, autorach, pomocy i licencji.",
-            "Application information, authors, support and license.",
+            "Informacje o aplikacji, jej autorze, wykorzystanym narzędziu i licencji.",
+            "Application information, its author, the underlying tool and license.",
         ),
     );
     let identity = gtk::Box::new(gtk::Orientation::Horizontal, 16);
@@ -2146,16 +2146,27 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     about.append(&copyright);
 
     about.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
-    let authors = about_section(t("Autorzy i podziękowania", "Authors and credits"));
+    let authors = about_section(t("Autor programu", "Application author"));
     authors.append(&about_link(
         "https://github.com/wolfgangxxiii",
-        t("wolfgangxxiii · autor interfejsu", "wolfgangxxiii · GUI author"),
+        t("wolfgangxxiii · autor aplikacji", "wolfgangxxiii · application author"),
     ));
-    authors.append(&about_link(
+    about.append(&authors);
+
+    about.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let upstream = about_section(t("Wykorzystane narzędzie", "Underlying tool"));
+    let upstream_note = gtk::Label::new(Some(t(
+        "Aplikacja wykorzystuje niezależny projekt plasmoid-updater do aktualizacji dodatków KDE.",
+        "This application uses the independent plasmoid-updater project to update KDE addons.",
+    )));
+    upstream_note.set_xalign(0.0);
+    upstream_note.set_wrap(true);
+    upstream.append(&upstream_note);
+    upstream.append(&about_link(
         backend::UPSTREAM,
         t(
-            "uwuclxdy · twórca plasmoid-updater",
-            "uwuclxdy · plasmoid-updater creator",
+            "uwuclxdy · autor narzędzia plasmoid-updater",
+            "uwuclxdy · author of the plasmoid-updater tool",
         ),
     ));
     let disclaimer = gtk::Label::new(Some(t(
@@ -2166,8 +2177,8 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     disclaimer.set_wrap(true);
     disclaimer.set_xalign(0.0);
     disclaimer.set_margin_top(8);
-    authors.append(&disclaimer);
-    about.append(&authors);
+    upstream.append(&disclaimer);
+    about.append(&upstream);
     add_page(&stack, "about", t("O programie", "About"), &about);
 
     const PAGE_KEYS: [&str; 6] = [

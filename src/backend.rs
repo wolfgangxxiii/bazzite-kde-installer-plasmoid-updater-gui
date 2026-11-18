@@ -174,21 +174,33 @@ fn on_path(name: &str) -> Option<PathBuf> {
         .find(|path| executable(path))
 }
 
-fn version_of(path: &Path) -> Option<String> {
+fn checked_updater_version(path: &Path) -> Result<String> {
     let result = Command::new(path)
         .arg("--version")
         .stdin(Stdio::null())
         .output()
-        .ok()?;
-    if !result.status.success() {
-        return None;
-    }
+        .with_context(|| format!("Nie można uruchomić {} --version", path.display()))?;
+    anyhow::ensure!(
+        result.status.success(),
+        "Polecenie --version zakończyło się kodem {}: {}",
+        result.status,
+        String::from_utf8_lossy(&result.stderr).trim()
+    );
     let version = String::from_utf8_lossy(&result.stdout);
     let mut columns = version.split_whitespace();
-    if columns.next()? != "plasmoid-updater" {
-        return None;
-    }
-    columns.next().map(str::to_owned)
+    anyhow::ensure!(
+        columns.next() == Some("plasmoid-updater"),
+        "Nieoczekiwana odpowiedź --version: {}",
+        version.trim()
+    );
+    columns
+        .next()
+        .map(str::to_owned)
+        .context("Brak numeru wersji w odpowiedzi --version")
+}
+
+fn version_of(path: &Path) -> Option<String> {
+    checked_updater_version(path).ok()
 }
 
 fn find_existing_updater(home: &Path) -> Option<(PathBuf, String)> {
@@ -1012,6 +1024,25 @@ fn parse_version(value: &str) -> Option<Vec<u32>> {
         .filter(|parts| parts.len() == 3)
 }
 
+fn stage_and_install_updater(binary: &Path, target: &Path) -> Result<()> {
+    let folder = target.parent().context("Niepoprawna ścieżka instalacji")?;
+    fs::create_dir_all(folder)?;
+    let mut staged = tempfile::NamedTempFile::new_in(folder)?;
+    std::io::copy(&mut File::open(binary)?, &mut staged)?;
+    staged
+        .as_file()
+        .set_permissions(fs::Permissions::from_mode(0o755))?;
+
+    // On Linux, executing a file still open for writing fails with ETXTBSY.
+    // into_temp_path closes the write handle but keeps the temporary path,
+    // and persist atomically replaces the destination after verification.
+    let staged = staged.into_temp_path();
+    checked_updater_version(staged.as_ref())
+        .context("Pobrana binarka nie odpowiada na --version — nie zastąpiono poprzedniej")?;
+    staged.persist(target).context("Nie można zastąpić programu")?;
+    Ok(())
+}
+
 fn install_updater(home: &Path, force: bool, log: &mut dyn FnMut(&str)) -> Result<()> {
     anyhow::ensure!(
         env::consts::ARCH == "x86_64",
@@ -1040,20 +1071,7 @@ fn install_updater(home: &Path, force: bool, log: &mut dyn FnMut(&str)) -> Resul
     log("SHA-256 poprawne. Instalowanie w ~/.local/bin…");
 
     let target = updater_binary(home);
-    let folder = target.parent().context("Niepoprawna ścieżka instalacji")?;
-    fs::create_dir_all(folder)?;
-    let mut staged = tempfile::NamedTempFile::new_in(folder)?;
-    std::io::copy(&mut File::open(&binary)?, &mut staged)?;
-    staged
-        .as_file()
-        .set_permissions(fs::Permissions::from_mode(0o755))?;
-    anyhow::ensure!(
-        version_of(staged.path()).is_some(),
-        "Pobrana binarka nie odpowiada na --version — nie zastąpiono poprzedniej"
-    );
-    staged
-        .persist(&target)
-        .context("Nie można zastąpić programu")?;
+    stage_and_install_updater(&binary, &target)?;
     log("Program został zainstalowany pomyślnie.");
     log("Uwaga: tylko dodatki użytkownika; obraz Bazzite pozostaje nietknięty.");
     Ok(())
@@ -1834,6 +1852,34 @@ mod tests {
             "2026-11-17 04:19:26 CET"
         );
         assert_eq!(concise_timestamp("no data".into()), "no data");
+    }
+
+    #[test]
+    fn staged_binary_can_run_before_installation() {
+        let temp = tempfile::tempdir().unwrap();
+        let downloaded = temp.path().join("downloaded-updater");
+        fs::write(
+            &downloaded,
+            "#!/bin/sh\nif [ \"$1\" = \"--version\" ]; then\n  echo 'plasmoid-updater 0.2.1'\nelse\n  exit 2\nfi\n",
+        )
+        .unwrap();
+        let installed = temp.path().join("bin/plasmoid-updater");
+        stage_and_install_updater(&downloaded, &installed).unwrap();
+        assert_eq!(version_of(&installed).as_deref(), Some("0.2.1"));
+    }
+
+    #[test]
+    fn invalid_staged_binary_does_not_replace_existing_installation() {
+        let temp = tempfile::tempdir().unwrap();
+        let downloaded = temp.path().join("invalid-updater");
+        fs::write(&downloaded, "not an executable").unwrap();
+        let installed = temp.path().join("bin/plasmoid-updater");
+        fs::create_dir_all(installed.parent().unwrap()).unwrap();
+        fs::write(&installed, "existing installation").unwrap();
+
+        let error = stage_and_install_updater(&downloaded, &installed).unwrap_err();
+        assert!(error.to_string().contains("nie odpowiada na --version"));
+        assert_eq!(fs::read_to_string(&installed).unwrap(), "existing installation");
     }
 
     #[test]

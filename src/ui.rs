@@ -175,18 +175,23 @@ fn apply_status(
     if summary.last_service_failed {
         parts.timer_value.add_css_class("warning");
     }
-    parts.timer_value.set_text(if summary.timer_active && summary.last_service_failed {
-        t(
-            "Aktywny · ostatni cykl nieudany",
-            "Active · last update failed",
-        )
-    } else if summary.timer_active {
-        t("Aktywny", "Active")
-    } else if summary.last_service_failed {
-        t("Nieaktywny · ostatni cykl nieudany", "Inactive · last update failed")
-    } else {
-        t("Nieaktywny", "Inactive")
-    });
+    parts
+        .timer_value
+        .set_text(if summary.timer_active && summary.last_service_failed {
+            t(
+                "Aktywny · ostatni cykl nieudany",
+                "Active · last update failed",
+            )
+        } else if summary.timer_active {
+            t("Aktywny", "Active")
+        } else if summary.last_service_failed {
+            t(
+                "Nieaktywny · ostatni cykl nieudany",
+                "Inactive · last update failed",
+            )
+        } else {
+            t("Nieaktywny", "Inactive")
+        });
     parts.repair_notice.set_visible(repair_needed);
     parts
         .repair_button

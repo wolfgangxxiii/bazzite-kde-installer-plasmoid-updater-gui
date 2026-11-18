@@ -45,7 +45,7 @@ Program działa w przestrzeni użytkownika, nie wymaga ciągłego działania w t
 | 🛡️ | **Kontrola i bezpieczeństwo** | Symulacja aktualizacji, wykluczenia dodatków, kopie zapasowe przejmowanych usług i historia zdarzeń. |
 | 🎨 | **Przyjazny interfejs** | Adaptacyjny układ, kolory akcentu z motywu KDE, obsługa języków polskiego i angielskiego. |
 
-### 🖥️ Pięć przejrzystych ekranów
+### 🖥️ Sześć przejrzystych ekranów
 
 | Ekran | Zastosowanie |
 |---|---|
@@ -54,6 +54,7 @@ Program działa w przestrzeni użytkownika, nie wymaga ciągłego działania w t
 | **Dodatki Plasma** | Przegląd dodatków użytkownika i systemowych oraz dostępnych wersji. |
 | **Automatyzacja** | Harmonogram, powiadomienia, wykluczenia, test konfiguracji i ręczne uruchomienie. |
 | **Dziennik** | Ostatnie wykonania, wyniki i logi usługi systemd. |
+| **O programie** | Wersja aplikacji, repozytorium, pomoc, licencja i autorzy. |
 
 Interfejs dopasowuje się do wąskich okien, zachowuje ustawienia języka i uwzględnia kolory aktywnego motywu Plasma. Obsługuje zarówno nowsze wyniki JSON narzędzia `plasmoid-updater`, jak i tekstowy format starszych wydań.
 
@@ -182,7 +183,7 @@ It runs in user space, doesn't need a permanently running background GUI, and **
 | 🛡️ | **Control and safety** | Dry runs, add-on exclusions, backups of adopted systemd units, and activity logs. |
 | 🎨 | **Native-feeling UI** | Responsive layout, KDE accent color integration, and English/Polish localization. |
 
-### 🖥️ Five focused screens
+### 🖥️ Six focused screens
 
 | Screen | Purpose |
 |---|---|
@@ -191,6 +192,7 @@ It runs in user space, doesn't need a permanently running background GUI, and **
 | **Plasma Addons** | Browse user and system add-ons and available versions. |
 | **Automation** | Schedule, notifications, exclusions, configuration tests, and manual runs. |
 | **Log** | Recent runs, results, and systemd service logs. |
+| **About** | Application version, repository, support, license, and credits. |
 
 The interface adapts to smaller windows, remembers your preferred language, and follows the active Plasma accent color. It supports both newer JSON responses from `plasmoid-updater` and the text output of older releases.
 

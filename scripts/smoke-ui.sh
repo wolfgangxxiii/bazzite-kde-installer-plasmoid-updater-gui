@@ -99,7 +99,7 @@ capture_page() {
 
 capture_page dashboard 540 720 narrow-dashboard
 capture_page dashboard 820 720 breakpoint-dashboard
-for page in dashboard installation addons automation journal; do
+for page in dashboard installation addons automation journal about; do
   capture_page "$page" 1020 740 "desktop-${page}"
 done
 capture_page automation 540 720 narrow-automation
@@ -110,3 +110,4 @@ capture_page dashboard 1020 740 desktop-dashboard-checklist
 capture_page dashboard 1020 740 desktop-dashboard-accent
 capture_page automation 1020 740 desktop-automation-tests
 capture_page installation 540 720 narrow-installation
+capture_page about 540 720 narrow-about

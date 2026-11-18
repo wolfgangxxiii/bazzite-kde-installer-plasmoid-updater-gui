@@ -655,6 +655,7 @@ enum UiIcon {
     Addons,
     Schedule,
     Journal,
+    About,
     Computer,
     Updater,
     Agent,
@@ -730,6 +731,13 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
                 cr.line_to(16.0, 12.0);
                 cr.move_to(9.0, 16.0);
                 cr.line_to(16.0, 16.0);
+            }
+            UiIcon::About => {
+                cr.arc(12.0, 12.0, 9.0, 0.0, std::f64::consts::TAU);
+                cr.move_to(12.0, 11.0);
+                cr.line_to(12.0, 17.0);
+                cr.move_to(12.0, 7.0);
+                cr.line_to(12.0, 7.1);
             }
             UiIcon::Computer => {
                 cr.rectangle(3.0, 4.0, 18.0, 13.0);
@@ -1038,6 +1046,33 @@ fn page(title: &str, subtitle: &str) -> gtk::Box {
     content
 }
 
+fn about_section(title: &str) -> gtk::Box {
+    let section = gtk::Box::new(gtk::Orientation::Vertical, 8);
+    section.set_margin_top(4);
+    let heading = gtk::Label::new(Some(title));
+    heading.add_css_class("title-3");
+    heading.set_xalign(0.0);
+    heading.set_wrap(true);
+    section.append(&heading);
+    section
+}
+
+fn about_link(url: &'static str, caption: &str) -> gtk::LinkButton {
+    let link = gtk::LinkButton::new(url);
+    link.add_css_class("about-link");
+    link.set_halign(gtk::Align::Start);
+    link.set_tooltip_text(Some(url));
+    let contents = gtk::Box::new(gtk::Orientation::Horizontal, 8);
+    let text = gtk::Label::new(Some(caption));
+    text.set_wrap(true);
+    text.set_wrap_mode(gtk::pango::WrapMode::WordChar);
+    text.set_xalign(0.0);
+    contents.append(&text);
+    contents.append(&vector_icon(UiIcon::ExternalLink));
+    link.set_child(Some(&contents));
+    link
+}
+
 fn add_page(stack: &gtk::Stack, key: &str, title: &str, content: &gtk::Box) {
     let clamp = adw::Clamp::new();
     clamp.set_maximum_size(840);
@@ -1054,6 +1089,7 @@ fn add_page(stack: &gtk::Stack, key: &str, title: &str, content: &gtk::Box) {
         "installation" => "system-software-install-symbolic",
         "addons" => "application-x-addon-symbolic",
         "automation" => "alarm-symbolic",
+        "about" => "help-about-symbolic",
         _ => "text-x-generic-symbolic",
     });
 }
@@ -1063,7 +1099,9 @@ pub fn build(app: &adw::Application) {
     // which vary with GTK font scaling and accessibility settings.
     let smoke_page = std::env::var("BAZZITE_GUI_SMOKE_PAGE").unwrap_or_default();
     let initial_page = match smoke_page.as_str() {
-        "installation" | "addons" | "automation" | "journal" => smoke_page.as_str(),
+        "installation" | "addons" | "automation" | "journal" | "about" => {
+            smoke_page.as_str()
+        }
         _ => "dashboard",
     };
     build_with_page(app, initial_page, None);
@@ -1148,6 +1186,10 @@ fn apply_host_accent_theme() {
         .app-header-subtitle { font-size: 11px; opacity: .73; }
         .app-version-badge { border-radius: 10px; padding: 1px 7px;
                              background-color: rgba(127,127,127,.15); font-size: 10px; font-weight: 700; }
+        .about-product-name { font-size: 20px; font-weight: 750; }
+        .about-logo { margin: 4px; }
+        button.about-link { border-radius: 10px; padding: 5px 10px; min-height: 32px; }
+        button.about-link:hover { background-color: rgba(127,127,127,.12); }
         .navigation-heading { font-size: 13px; font-weight: 750; }
         .navigation-caption { font-size: 10px; letter-spacing: .6px; opacity: .68; }
         .navigation-rule { opacity: .45; }
@@ -1399,7 +1441,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     stack.set_hexpand(true);
     stack.set_vexpand(true);
     stack.set_transition_type(gtk::StackTransitionType::SlideLeftRight);
-    // Explicit navigation rows always show all five destinations. GtkStackSidebar
+    // Explicit navigation rows always show all six destinations. GtkStackSidebar
     // showed only the selected page on some Bazzite KDE configurations.
     let sidebar = gtk::ListBox::new();
     sidebar.set_selection_mode(gtk::SelectionMode::Single);
@@ -1411,6 +1453,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         (t("Dodatki Plasma", "Plasma Addons"), UiIcon::Addons),
         (t("Automatyzacja", "Automation"), UiIcon::Schedule),
         (t("Dziennik", "Log"), UiIcon::Journal),
+        (t("O programie", "About"), UiIcon::About),
     ];
     for (label, kind) in nav_entries {
         let item = gtk::Box::new(gtk::Orientation::Horizontal, 10);
@@ -1441,7 +1484,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     navigation_heading.set_xalign(0.0);
     navigation_heading.set_hexpand(true);
     nav_heading_line.append(&navigation_heading);
-    let nav_count = gtk::Label::new(Some("05"));
+    let nav_count = gtk::Label::new(Some("06"));
     nav_count.add_css_class("app-version-badge");
     nav_heading_line.append(&nav_count);
     nav_header.append(&nav_heading_line);
@@ -2025,12 +2068,115 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     journal.append(&log_group);
     add_page(&stack, "journal", t("Dziennik", "Log"), &journal);
 
-    const PAGE_KEYS: [&str; 5] = [
+    let about = page(
+        t("O programie", "About"),
+        t(
+            "Informacje o aplikacji, autorach, pomocy i licencji.",
+            "Application information, authors, support and license.",
+        ),
+    );
+    let identity = gtk::Box::new(gtk::Orientation::Horizontal, 16);
+    identity.add_css_class("card");
+    identity.set_margin_bottom(8);
+    identity.set_margin_top(4);
+    let logo = gtk::Image::from_icon_name("io.github.wolfgangxxiii.BazzitePlasmoidUpdater");
+    logo.add_css_class("about-logo");
+    logo.set_pixel_size(72);
+    logo.set_valign(gtk::Align::Start);
+    logo.set_margin_start(14);
+    logo.set_margin_top(14);
+    logo.set_margin_bottom(14);
+    identity.append(&logo);
+    let identity_text = gtk::Box::new(gtk::Orientation::Vertical, 6);
+    identity_text.set_hexpand(true);
+    identity_text.set_margin_top(14);
+    identity_text.set_margin_end(14);
+    identity_text.set_margin_bottom(14);
+    let name = gtk::Label::new(Some("Bazzite Plasmoid Updater GUI"));
+    name.add_css_class("about-product-name");
+    name.set_wrap(true);
+    name.set_xalign(0.0);
+    identity_text.append(&name);
+    let version = gtk::Label::new(Some(&format!("v{}", env!("CARGO_PKG_VERSION"))));
+    version.add_css_class("dim-label");
+    version.set_xalign(0.0);
+    identity_text.append(&version);
+    let description = gtk::Label::new(Some(t(
+        "Graficzna instalacja i zarządzanie aktualizacjami dodatków KDE Plasma na Bazzite. Harmonogram działa w tle bez uruchomionego okna programu.",
+        "Graphical installation and KDE Plasma addon updates on Bazzite. Scheduled updates run in the background without the application window.",
+    )));
+    description.set_xalign(0.0);
+    description.set_wrap(true);
+    identity_text.append(&description);
+    identity.append(&identity_text);
+    about.append(&identity);
+
+    let project = about_section(t("Strona internetowa", "Website"));
+    project.append(&about_link(
+        env!("CARGO_PKG_REPOSITORY"),
+        t("Repozytorium projektu na GitHub", "Project repository on GitHub"),
+    ));
+    project.append(&about_link(
+        "https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases",
+        t("Wydania i pliki AppImage", "Releases and AppImage downloads"),
+    ));
+    about.append(&project);
+
+    about.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let help = about_section(t("Uzyskaj pomoc", "Get help"));
+    help.append(&about_link(
+        "https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues",
+        t("Zgłoś błąd lub zaproponuj funkcję", "Report an issue or request a feature"),
+    ));
+    about.append(&help);
+
+    about.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let copyright = about_section(t("Prawa autorskie", "Copyright"));
+    let license = gtk::Label::new(Some(t(
+        "Licencja: GNU GPL-3.0-or-later",
+        "License: GNU GPL-3.0-or-later",
+    )));
+    license.set_xalign(0.0);
+    license.set_wrap(true);
+    copyright.append(&license);
+    copyright.append(&about_link(
+        "https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/blob/main/LICENSE",
+        t("Przeczytaj licencję", "Read the license"),
+    ));
+    about.append(&copyright);
+
+    about.append(&gtk::Separator::new(gtk::Orientation::Horizontal));
+    let authors = about_section(t("Autorzy i podziękowania", "Authors and credits"));
+    authors.append(&about_link(
+        "https://github.com/wolfgangxxiii",
+        t("wolfgangxxiii · autor interfejsu", "wolfgangxxiii · GUI author"),
+    ));
+    authors.append(&about_link(
+        backend::UPSTREAM,
+        t(
+            "uwuclxdy · twórca plasmoid-updater",
+            "uwuclxdy · plasmoid-updater creator",
+        ),
+    ));
+    let disclaimer = gtk::Label::new(Some(t(
+        "Projekt niezależny, niepowiązany oficjalnie z Bazzite ani KDE.",
+        "Independent project, not officially affiliated with Bazzite or KDE.",
+    )));
+    disclaimer.add_css_class("dim-label");
+    disclaimer.set_wrap(true);
+    disclaimer.set_xalign(0.0);
+    disclaimer.set_margin_top(8);
+    authors.append(&disclaimer);
+    about.append(&authors);
+    add_page(&stack, "about", t("O programie", "About"), &about);
+
+    const PAGE_KEYS: [&str; 6] = [
         "dashboard",
         "installation",
         "addons",
         "automation",
         "journal",
+        "about",
     ];
     let stack_for_navigation = stack.clone();
     sidebar.connect_row_selected(move |_, row| {

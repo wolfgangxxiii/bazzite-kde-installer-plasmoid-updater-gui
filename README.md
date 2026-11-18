@@ -14,7 +14,7 @@ A native **Rust + GTK4/libadwaita** companion app for [plasmoid-updater](https:/
 ![Platform](https://img.shields.io/badge/platform-Bazzite%20KDE-blue)
 ![Architecture](https://img.shields.io/badge/architecture-x86__64-5965a8)
 
-**[⬇️ Download AppImage / Pobierz AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage)** · **[📦 Releases](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases)** · **[🐛 Report an issue](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues)**
+**[⬇️ Download AppImage / Pobierz AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage)** · **[📦 Releases](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases)** · **[🐛 Report an issue](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues)**
 
 **[🇵🇱 Polski](#pl)** · **[🇬🇧 English](#en)**
 
@@ -56,18 +56,18 @@ Program działa w przestrzeni użytkownika, nie wymaga ciągłego działania w t
 | **Dziennik** | Ostatnie wykonania, wyniki i logi usługi systemd. |
 | **O programie** | Wersja aplikacji, repozytorium, pomoc, licencja i autorzy. |
 
-Interfejs dopasowuje się do wąskich okien, zachowuje ustawienia języka i uwzględnia kolory aktywnego motywu Plasma. Obsługuje zarówno nowsze wyniki JSON narzędzia `plasmoid-updater`, jak i tekstowy format starszych wydań.
+Interfejs dopasowuje się do wąskich okien, zachowuje ustawienia języka (polski, angielski lub automatyczny wybór według ustawień systemu) i uwzględnia kolory aktywnego motywu Plasma. Obsługuje zarówno nowsze wyniki JSON narzędzia `plasmoid-updater`, jak i tekstowy format starszych wydań.
 
 ### 📥 Instalacja
 
 **Wymagania:** Bazzite z **KDE Plasma 6**, architektura **x86_64**, połączenie z Internetem, `curl`, `systemctl --user` i `kpackagetool6`. Do instalowania aktualizacji dodatków potrzebny jest `bsdtar` — jeżeli go brakuje, instalator może doinstalować `libarchive` przez Homebrew.
 
-1. **[Pobierz najnowszy AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage)**.
+1. **[Pobierz najnowszy AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage)**.
 2. Otwórz terminal w katalogu z pobranym plikiem i wykonaj:
 
    ```bash
-   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage
-   ./Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage
+   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
+   ./Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
    ```
 
 3. Na ekranie **Pulpit** kliknij **Sprawdź składniki**.
@@ -194,18 +194,18 @@ It runs in user space, doesn't need a permanently running background GUI, and **
 | **Log** | Recent runs, results, and systemd service logs. |
 | **About** | Application version, repository, support, license, and credits. |
 
-The interface adapts to smaller windows, remembers your preferred language, and follows the active Plasma accent color. It supports both newer JSON responses from `plasmoid-updater` and the text output of older releases.
+The interface adapts to smaller windows, remembers your preferred language (Polish, English, or automatic selection based on the system locale), and follows the active Plasma accent color. It supports both newer JSON responses from `plasmoid-updater` and the text output of older releases.
 
 ### 📥 Installation
 
 **Requirements:** Bazzite with **KDE Plasma 6**, **x86_64** architecture, Internet access, `curl`, `systemctl --user`, and `kpackagetool6`. Updating add-ons requires `bsdtar`; if missing, the installer can install `libarchive` through Homebrew.
 
-1. **[Download the latest AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage)**.
+1. **[Download the latest AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage)**.
 2. Open a terminal in the download directory and run:
 
    ```bash
-   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage
-   ./Bazzite-Plasmoid-Updater-GUI-v1.0.0-x86_64.AppImage
+   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
+   ./Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
    ```
 
 3. On the **Dashboard**, select **Check requirements**.

@@ -9,33 +9,54 @@ use std::sync::atomic::{AtomicU8, Ordering};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Language {
+    System,
     Polish,
     English,
 }
 
-static ACTIVE: AtomicU8 = AtomicU8::new(0);
+// Keep the previous default (Polish) for users without a language setting.
+static ACTIVE: AtomicU8 = AtomicU8::new(1);
 
 impl Language {
     pub fn selected() -> Self {
-        if ACTIVE.load(Ordering::Relaxed) == 1 {
-            Self::English
-        } else {
-            Self::Polish
+        match ACTIVE.load(Ordering::Relaxed) {
+            0 => Self::System,
+            2 => Self::English,
+            _ => Self::Polish,
         }
+    }
+
+    pub fn effective() -> Self {
+        match Self::selected() {
+            Self::System => Self::system_language(),
+            choice => choice,
+        }
+    }
+
+    fn system_language() -> Self {
+        for key in ["LC_ALL", "LC_MESSAGES", "LANGUAGE", "LANG"] {
+            if let Ok(locale) = env::var(key) {
+                if let Some(language) = locale_language(&locale) {
+                    return language;
+                }
+            }
+        }
+        Self::English
     }
 
     pub fn index(self) -> u32 {
         match self {
-            Self::Polish => 0,
-            Self::English => 1,
+            Self::System => 0,
+            Self::Polish => 1,
+            Self::English => 2,
         }
     }
 
     pub fn from_index(value: u32) -> Self {
-        if value == 1 {
-            Self::English
-        } else {
-            Self::Polish
+        match value {
+            0 => Self::System,
+            2 => Self::English,
+            _ => Self::Polish,
         }
     }
 
@@ -49,6 +70,7 @@ impl Language {
 
     pub fn save(self) -> Result<()> {
         let value = match self {
+            Self::System => "auto\n",
             Self::Polish => "pl\n",
             Self::English => "en\n",
         };
@@ -59,10 +81,23 @@ impl Language {
 
     fn parse(value: &str) -> Option<Self> {
         match value.trim() {
+            "auto" => Some(Self::System),
             "pl" => Some(Self::Polish),
             "en" => Some(Self::English),
             _ => None,
         }
+    }
+}
+
+fn locale_language(locale: &str) -> Option<Language> {
+    let locale = locale.split(':').next()?.trim().to_ascii_lowercase();
+    if locale.is_empty() || matches!(locale.as_str(), "c" | "posix") {
+        return None;
+    }
+    if locale == "pl" || locale.starts_with("pl_") || locale.starts_with("pl-") {
+        Some(Language::Polish)
+    } else {
+        Some(Language::English)
     }
 }
 
@@ -76,9 +111,9 @@ fn config_path() -> PathBuf {
 }
 
 pub fn t(pl: &'static str, en: &'static str) -> &'static str {
-    match Language::selected() {
+    match Language::effective() {
         Language::Polish => pl,
-        Language::English => en,
+        Language::English | Language::System => en,
     }
 }
 
@@ -88,6 +123,7 @@ mod tests {
 
     #[test]
     fn language_file_accepts_only_known_codes() {
+        assert_eq!(Language::parse("auto\n"), Some(Language::System));
         assert_eq!(Language::parse("pl\n"), Some(Language::Polish));
         assert_eq!(Language::parse("en\n"), Some(Language::English));
         assert_eq!(Language::parse("fr"), None);
@@ -95,8 +131,16 @@ mod tests {
 
     #[test]
     fn language_index_round_trip() {
-        for language in [Language::Polish, Language::English] {
+        for language in [Language::System, Language::Polish, Language::English] {
             assert_eq!(Language::from_index(language.index()), language);
         }
+    }
+
+    #[test]
+    fn detects_supported_system_language_with_safe_fallback() {
+        assert_eq!(locale_language("pl_PL.UTF-8"), Some(Language::Polish));
+        assert_eq!(locale_language("pl:en_US"), Some(Language::Polish));
+        assert_eq!(locale_language("de_DE.UTF-8"), Some(Language::English));
+        assert_eq!(locale_language("C"), None);
     }
 }

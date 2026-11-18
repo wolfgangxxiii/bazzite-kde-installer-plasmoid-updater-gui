@@ -21,7 +21,7 @@ capture_page() {
     expand_dashboard=1
   fi
 
-  if [[ "$label" == desktop-dashboard-accent ]]; then
+  if [[ "$label" == desktop-dashboard-accent || "$label" == desktop-about-accent ]]; then
     accent_config="$(mktemp -d)"
     printf '[General]\nAccentColor=213,95,180\n' > "$accent_config/kdeglobals"
     appearance_env=(XDG_CONFIG_HOME="$accent_config" XDG_CURRENT_DESKTOP=KDE)
@@ -109,6 +109,7 @@ capture_page automation 540 720 narrow-automation-advanced
 capture_page dashboard 540 720 narrow-dashboard-expanders
 capture_page dashboard 1020 740 desktop-dashboard-checklist
 capture_page dashboard 1020 740 desktop-dashboard-accent
+capture_page about 1020 740 desktop-about-accent
 capture_page automation 1020 740 desktop-automation-tests
 capture_page installation 540 720 narrow-installation
 capture_page about 540 720 narrow-about

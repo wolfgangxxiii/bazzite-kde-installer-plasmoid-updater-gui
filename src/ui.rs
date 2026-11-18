@@ -103,7 +103,7 @@ struct ViewState {
 }
 
 fn english() -> bool {
-    Language::selected() == Language::English
+    Language::effective() == Language::English
 }
 
 fn refresh_status(parts: &UiParts) {
@@ -668,11 +668,16 @@ enum UiIcon {
 }
 
 fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
+    vector_icon_sized(kind, 18)
+}
+
+fn vector_icon_sized(kind: UiIcon, size: i32) -> gtk::DrawingArea {
     let icon = gtk::DrawingArea::new();
-    icon.set_content_width(18);
-    icon.set_content_height(18);
-    icon.set_size_request(18, 18);
+    icon.set_content_width(size);
+    icon.set_content_height(size);
+    icon.set_size_request(size, size);
     icon.set_draw_func(move |area, cr, width, height| {
+        cr.set_antialias(gtk::cairo::Antialias::Best);
         let color = area.color();
         cr.set_source_rgba(
             color.red().into(),
@@ -686,14 +691,12 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
         cr.set_line_join(gtk::cairo::LineJoin::Round);
         match kind {
             UiIcon::Dashboard => {
-                for (x, y, w, h) in [
-                    (3.0, 3.0, 8.0, 8.0),
-                    (13.0, 3.0, 8.0, 5.0),
-                    (3.0, 13.0, 8.0, 8.0),
-                    (13.0, 10.0, 8.0, 11.0),
-                ] {
-                    cr.rectangle(x, y, w, h);
-                }
+                // A centered dashboard window, distinct from the addon grid.
+                cr.rectangle(3.0, 3.0, 18.0, 18.0);
+                cr.move_to(3.0, 10.0);
+                cr.line_to(21.0, 10.0);
+                cr.move_to(12.0, 10.0);
+                cr.line_to(12.0, 21.0);
             }
             UiIcon::Install => {
                 cr.move_to(12.0, 3.0);
@@ -776,16 +779,17 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
                 }
             }
             UiIcon::Refresh => {
-                // Balanced opposing arcs, with both arrowheads inside 24x24.
-                cr.arc(12.0, 12.0, 8.0, 3.85, 6.0);
-                cr.move_to(17.0, 3.0);
-                cr.line_to(20.0, 6.0);
-                cr.line_to(15.0, 6.0);
+                // Two smooth, equally sized arrows. Render this at 22px in
+                // the header so fractional KDE scaling keeps it crisp.
+                cr.arc(12.0, 12.0, 8.0, -2.40, 0.0);
+                cr.move_to(16.5, 8.5);
+                cr.line_to(20.0, 12.0);
+                cr.line_to(20.0, 7.5);
                 cr.new_sub_path();
-                cr.arc(12.0, 12.0, 8.0, 0.7, 2.85);
-                cr.move_to(7.0, 21.0);
-                cr.line_to(4.0, 18.0);
-                cr.line_to(9.0, 18.0);
+                cr.arc(12.0, 12.0, 8.0, 0.74, std::f64::consts::PI);
+                cr.move_to(7.5, 15.5);
+                cr.line_to(4.0, 12.0);
+                cr.line_to(4.0, 16.5);
             }
             UiIcon::ChevronDown => {
                 cr.move_to(5.0, 9.0);
@@ -808,16 +812,17 @@ fn vector_icon(kind: UiIcon) -> gtk::DrawingArea {
                 cr.line_to(12.0, 18.1);
             }
             UiIcon::ExternalLink => {
-                cr.move_to(12.0, 4.0);
-                cr.line_to(20.0, 4.0);
-                cr.line_to(20.0, 12.0);
-                cr.move_to(20.0, 4.0);
+                // Standard external-link glyph with a balanced open corner.
+                cr.move_to(9.0, 5.0);
+                cr.line_to(5.0, 5.0);
+                cr.line_to(5.0, 19.0);
+                cr.line_to(19.0, 19.0);
+                cr.line_to(19.0, 15.0);
+                cr.move_to(12.0, 5.0);
+                cr.line_to(19.0, 5.0);
+                cr.line_to(19.0, 12.0);
+                cr.move_to(19.0, 5.0);
                 cr.line_to(10.0, 14.0);
-                cr.move_to(17.0, 14.0);
-                cr.line_to(17.0, 20.0);
-                cr.line_to(4.0, 20.0);
-                cr.line_to(4.0, 7.0);
-                cr.line_to(10.0, 7.0);
             }
         }
         let _ = cr.stroke();
@@ -1060,6 +1065,8 @@ fn about_section(title: &str) -> gtk::Box {
 fn about_link(url: &'static str, caption: &str) -> gtk::LinkButton {
     let link = gtk::LinkButton::new(url);
     link.add_css_class("about-link");
+    link.add_css_class("theme-action");
+    link.add_css_class("suggested-action");
     link.set_halign(gtk::Align::Start);
     link.set_tooltip_text(Some(url));
     let contents = gtk::Box::new(gtk::Orientation::Horizontal, 8);
@@ -1186,10 +1193,8 @@ fn apply_host_accent_theme() {
                              background-color: rgba(127,127,127,.15); font-size: 10px; font-weight: 700; }
         .about-product-name { font-size: 20px; font-weight: 750; }
         .about-logo { margin: 4px; }
-        button.about-link { border-radius: 10px; padding: 5px 10px; min-height: 32px; }
-        button.about-link:hover { background-color: rgba(127,127,127,.12); }
+        button.about-link { border-radius: 10px; padding: 7px 12px; min-height: 36px; }
         .navigation-heading { font-size: 13px; font-weight: 750; }
-        .navigation-caption { font-size: 10px; letter-spacing: .6px; opacity: .68; }
         .navigation-rule { opacity: .45; }
         button.theme-action { border-radius: 10px; min-height: 36px; }
         button.upstream-link { border-radius: 12px; min-height: 36px; padding: 5px 14px;
@@ -1392,7 +1397,7 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     )));
     header.pack_start(&navigation_toggle);
     let refresh = gtk::Button::new();
-    let refresh_icon = vector_icon(UiIcon::Refresh);
+    let refresh_icon = vector_icon_sized(UiIcon::Refresh, 22);
     refresh_icon.set_halign(gtk::Align::Center);
     refresh_icon.set_valign(gtk::Align::Center);
     refresh.set_child(Some(&refresh_icon));
@@ -1404,10 +1409,13 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
         "Refresh installation status",
     )));
     header.pack_end(&refresh);
-    let language_choice = gtk::DropDown::from_strings(&["PL", "EN"]);
+    let language_choice = gtk::DropDown::from_strings(&["Auto", "Polski", "English"]);
     language_choice.set_height_request(36);
     language_choice.set_selected(Language::selected().index());
-    language_choice.set_tooltip_text(Some(t("Język interfejsu", "Interface language")));
+    language_choice.set_tooltip_text(Some(t(
+        "Język interfejsu (automatyczny wybór według ustawień systemu)",
+        "Interface language (automatic selection follows the system locale)",
+    )));
     header.pack_end(&language_choice);
 
     // Long operation messages belong in a dedicated status bar, not the header.
@@ -1469,27 +1477,14 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     }
     let navigation = gtk::Box::new(gtk::Orientation::Vertical, 10);
     navigation.set_margin_top(18);
-    let nav_header = gtk::Box::new(gtk::Orientation::Vertical, 4);
+    let nav_header = gtk::Box::new(gtk::Orientation::Vertical, 0);
     nav_header.set_margin_start(18);
     nav_header.set_margin_end(14);
     nav_header.set_margin_bottom(6);
-    let nav_heading_line = gtk::Box::new(gtk::Orientation::Horizontal, 9);
-    let nav_icon = vector_icon(UiIcon::Menu);
-    nav_icon.add_css_class("dim-label");
-    nav_heading_line.append(&nav_icon);
     let navigation_heading = gtk::Label::new(Some(t("Nawigacja", "Navigation")));
     navigation_heading.add_css_class("navigation-heading");
     navigation_heading.set_xalign(0.0);
-    navigation_heading.set_hexpand(true);
-    nav_heading_line.append(&navigation_heading);
-    let nav_count = gtk::Label::new(Some("06"));
-    nav_count.add_css_class("app-version-badge");
-    nav_heading_line.append(&nav_count);
-    nav_header.append(&nav_heading_line);
-    let nav_caption = gtk::Label::new(Some(t("SEKCJE APLIKACJI", "APP SECTIONS")));
-    nav_caption.add_css_class("navigation-caption");
-    nav_caption.set_xalign(0.0);
-    nav_header.append(&nav_caption);
+    nav_header.append(&navigation_heading);
     navigation.append(&nav_header);
     let nav_separator = gtk::Separator::new(gtk::Orientation::Horizontal);
     nav_separator.add_css_class("navigation-rule");

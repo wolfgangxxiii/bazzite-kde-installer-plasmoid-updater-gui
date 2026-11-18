@@ -72,6 +72,11 @@ if [[ -d /usr/share/icons/Adwaita ]]; then
   cp -a /usr/share/icons/Adwaita "$APPDIR/usr/share/icons/Adwaita"
 fi
 
-export OUTPUT="$DISTDIR/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage"
+APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+if [[ -z "$APP_VERSION" ]]; then
+  echo "Cannot determine application version from Cargo.toml" >&2
+  exit 1
+fi
+export OUTPUT="$DISTDIR/Bazzite-Plasmoid-Updater-GUI-v${APP_VERSION}-x86_64.AppImage"
 "$LINUXDEPLOY" --appdir "$APPDIR" --output appimage
 echo "AppImage available at $OUTPUT"

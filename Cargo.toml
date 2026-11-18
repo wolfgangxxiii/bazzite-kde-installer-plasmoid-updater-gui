@@ -1,6 +1,6 @@
 [package]
 name = "bazzite-plasmoid-updater-gui"
-version = "0.5.12"
+version = "1.0.0"
 edition = "2021"
 description = "A native GTK4/libadwaita installer and update scheduler for plasmoid-updater on Bazzite"
 license = "GPL-3.0-or-later"

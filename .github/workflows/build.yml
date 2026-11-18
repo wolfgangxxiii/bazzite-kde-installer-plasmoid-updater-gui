@@ -37,14 +37,17 @@ jobs:
       - name: Test standalone background agent
         run: |
           cargo build --locked --release --bins
-          ./target/release/plasmoid-updater-agent --version | grep -F 'plasmoid-updater-agent 0.5.12'
+          app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          ./target/release/plasmoid-updater-agent --version | grep -Fx "plasmoid-updater-agent ${app_version}"
       - name: Build AppImage
         run: bash scripts/build-appimage.sh
       - name: Smoke test AppImage under Xvfb
         run: |
+          appimage="$(find ./dist -maxdepth 1 -type f -name 'Bazzite-Plasmoid-Updater-GUI-v*-x86_64.AppImage' -print -quit)"
+          test -n "$appimage"
           set +e
           timeout 12s env APPIMAGE_EXTRACT_AND_RUN=1 GDK_BACKEND=x11 \
-            xvfb-run -a ./dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage \
+            xvfb-run -a "$appimage" \
             > appimage-smoke.log 2>&1
           exit_code=$?
           set -e
@@ -55,13 +58,15 @@ jobs:
           fi
       - name: Smoke test English interface under Xvfb
         run: |
+          appimage="$(find ./dist -maxdepth 1 -type f -name 'Bazzite-Plasmoid-Updater-GUI-v*-x86_64.AppImage' -print -quit)"
+          test -n "$appimage"
           smoke_config="$(mktemp -d)"
           mkdir -p "$smoke_config/bazzite-plasmoid-updater-gui"
           printf 'en\n' > "$smoke_config/bazzite-plasmoid-updater-gui/language"
           set +e
           timeout 8s env XDG_CONFIG_HOME="$smoke_config" G_DEBUG=fatal-criticals \
             APPIMAGE_EXTRACT_AND_RUN=1 GDK_BACKEND=x11 \
-            xvfb-run -a ./dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage \
+            xvfb-run -a "$appimage" \
             > english-smoke.log 2>&1
           exit_code=$?
           set -e
@@ -88,16 +93,18 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          app_version="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+          release_tag="v${app_version}"
           if [ "$GITHUB_REF" = "refs/heads/main" ]; then
             # Publish a new stable download after the first successful build.
             # Future pushes do not silently replace an already published release.
-            if gh release view v0.5.12 >/dev/null 2>&1; then
-              echo "v0.5.12 already published; use a new version tag for another release."
+            if gh release view "$release_tag" >/dev/null 2>&1; then
+              echo "$release_tag already published; use a new version tag for another release."
             else
-              gh release create v0.5.12 dist/*.AppImage \
+              gh release create "$release_tag" dist/*.AppImage \
                 --target "$GITHUB_SHA" \
-                --title "Bazzite Plasmoid Updater GUI v0.5.12" \
-                --notes "Ponawianie przejściowych błędów połączenia z KDE Store, czytelny wynik ostatniego cyklu, poprawne komunikaty odczytu dziennika i zachowanie listy dodatków po nieudanej aktualizacji."
+                --title "Bazzite Plasmoid Updater GUI ${release_tag}" \
+                --notes "Wersja 1.0: karta O programie, linki do dokumentacji i pomocy, informacje o autorze GUI i wykorzystanym narzędziu plasmoid-updater."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber

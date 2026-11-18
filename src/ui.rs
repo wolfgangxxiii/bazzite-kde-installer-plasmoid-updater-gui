@@ -1099,9 +1099,7 @@ pub fn build(app: &adw::Application) {
     // which vary with GTK font scaling and accessibility settings.
     let smoke_page = std::env::var("BAZZITE_GUI_SMOKE_PAGE").unwrap_or_default();
     let initial_page = match smoke_page.as_str() {
-        "installation" | "addons" | "automation" | "journal" | "about" => {
-            smoke_page.as_str()
-        }
+        "installation" | "addons" | "automation" | "journal" | "about" => smoke_page.as_str(),
         _ => "dashboard",
     };
     build_with_page(app, initial_page, None);
@@ -2114,11 +2112,17 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let project = about_section(t("Strona internetowa", "Website"));
     project.append(&about_link(
         env!("CARGO_PKG_REPOSITORY"),
-        t("Repozytorium projektu na GitHub", "Project repository on GitHub"),
+        t(
+            "Repozytorium projektu na GitHub",
+            "Project repository on GitHub",
+        ),
     ));
     project.append(&about_link(
         "https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases",
-        t("Wydania i pliki AppImage", "Releases and AppImage downloads"),
+        t(
+            "Wydania i pliki AppImage",
+            "Releases and AppImage downloads",
+        ),
     ));
     about.append(&project);
 
@@ -2126,7 +2130,10 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let help = about_section(t("Uzyskaj pomoc", "Get help"));
     help.append(&about_link(
         "https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues",
-        t("Zgłoś błąd lub zaproponuj funkcję", "Report an issue or request a feature"),
+        t(
+            "Zgłoś błąd lub zaproponuj funkcję",
+            "Report an issue or request a feature",
+        ),
     ));
     about.append(&help);
 
@@ -2149,7 +2156,10 @@ fn build_with_page(app: &adw::Application, initial_page: &str, initial_state: Op
     let authors = about_section(t("Autor programu", "Application author"));
     authors.append(&about_link(
         "https://github.com/wolfgangxxiii",
-        t("wolfgangxxiii · autor aplikacji", "wolfgangxxiii · application author"),
+        t(
+            "wolfgangxxiii · autor aplikacji",
+            "wolfgangxxiii · application author",
+        ),
     ));
     about.append(&authors);
 

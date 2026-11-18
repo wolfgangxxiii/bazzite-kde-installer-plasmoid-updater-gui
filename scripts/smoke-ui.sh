@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-APPIMAGE="${1:-dist/Bazzite-Plasmoid-Updater-GUI-x86_64.AppImage}"
+APP_VERSION="$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -n 1)"
+APPIMAGE="${1:-dist/Bazzite-Plasmoid-Updater-GUI-v${APP_VERSION}-x86_64.AppImage}"
 mkdir -p ui-smoke
 app_pid=""
 trap 'if [[ -n "$app_pid" ]]; then kill -TERM -- "-$app_pid" 2>/dev/null || true; wait "$app_pid" 2>/dev/null || true; fi' EXIT

@@ -39,6 +39,7 @@ Program działa w przestrzeni użytkownika, nie wymaga ciągłego działania w t
 | 🧩 | **Dodatki Plasma** | Lista zainstalowanych komponentów, wyszukiwanie, filtry i sprawdzanie dostępnych aktualizacji. |
 | ⬇️ | **Instalacja jednym kliknięciem** | Pobranie lub aktualizacja oficjalnej binarki `plasmoid-updater` z weryfikacją SHA-256. |
 | 🔄 | **Automatyczne aktualizacje** | Harmonogram co **6, 12 lub 24 godziny**, obsługiwany przez `systemd --user`. |
+| 🌐 | **Odporność na awarie sieci** | Trzy próby połączenia przy przejściowych błędach KDE Store, z odstępami 3 i 9 sekund. |
 | 🚀 | **Aktualizacja samego narzędzia** | Sprawdzanie nowych wydań `plasmoid-updater` i instalowanie ich w razie potrzeby. |
 | 🔔 | **Powiadomienia** | Opcjonalne komunikaty KDE o powodzeniu lub niepowodzeniu aktualizacji. |
 | 🛡️ | **Kontrola i bezpieczeństwo** | Symulacja aktualizacji, wykluczenia dodatków, kopie zapasowe przejmowanych usług i historia zdarzeń. |
@@ -82,6 +83,8 @@ Interfejs dopasowuje się do wąskich okien, zachowuje ustawienia języka i uwzg
 2. Agent opcjonalnie sprawdza nowe wydanie `plasmoid-updater`, pobiera je i weryfikuje sumę SHA-256.
 3. Następnie aktualizuje **dodatki KDE Store użytkownika**, z uwzględnieniem wykluczeń.
 4. Wynik zapisuje w dzienniku i — zależnie od ustawień — wysyła powiadomienie KDE.
+
+Jeśli KDE Store chwilowo nie odpowiada, agent ponawia żądanie maksymalnie dwa razy. Przy dłuższej awarii kończy cykl z błędem, nie ukrywa go i spróbuje ponownie przy następnym terminie harmonogramu. Po nieudanej próbie GUI zachowuje poprzednią listę aktualizacji z ostrzeżeniem, że dane mogą być nieaktualne.
 
 - Interwały: **6 / 12 / 24 h**; pominięty cykl może zostać nadrobiony po następnym zalogowaniu dzięki `Persistent=true`.
 - Domyślnie aplikacja **nie restartuje powłoki Plasma** po aktualizacji.
@@ -173,6 +176,7 @@ It runs in user space, doesn't need a permanently running background GUI, and **
 | 🧩 | **Plasma add-on browser** | Browse installed components, search, filter, and check available updates. |
 | ⬇️ | **One-click setup** | Download or update the official `plasmoid-updater` binary with SHA-256 verification. |
 | 🔄 | **Scheduled updates** | Run automatically every **6, 12, or 24 hours** with `systemd --user`. |
+| 🌐 | **Network resilience** | Three attempts for transient KDE Store failures, with 3- and 9-second delays. |
 | 🚀 | **Self-updating CLI tool** | Check for and install newer releases of `plasmoid-updater`. |
 | 🔔 | **Desktop notifications** | Optional KDE notifications for successful and failed update cycles. |
 | 🛡️ | **Control and safety** | Dry runs, add-on exclusions, backups of adopted systemd units, and activity logs. |
@@ -216,6 +220,8 @@ The interface adapts to smaller windows, remembers your preferred language, and 
 2. Optionally, the agent checks for a new `plasmoid-updater` release, downloads it, and verifies its SHA-256 checksum.
 3. It then updates **user-installed KDE Store add-ons**, respecting your exclusions.
 4. Results are recorded in the journal, with optional KDE notifications.
+
+If KDE Store is temporarily unavailable, the agent makes up to two additional attempts. A longer outage still causes an explicit failure, and the timer will try again on its next scheduled run. After a failed update, the GUI retains the previous update list and warns that it may be outdated.
 
 - Frequencies: **6 / 12 / 24 hours**. With `Persistent=true`, a missed run can be triggered after the next login.
 - By default, the application **does not restart Plasma** after an update.

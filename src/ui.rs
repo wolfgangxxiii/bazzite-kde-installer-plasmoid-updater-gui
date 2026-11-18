@@ -28,6 +28,24 @@ impl Task {
                 | Self::Operation(Job::Check | Job::DryRun | Job::Diagnose | Job::Journal)
         )
     }
+
+    fn completion_message(self) -> &'static str {
+        match self {
+            Self::Operation(Job::Journal) => t(
+                "✓ Dziennik odczytany. Sprawdź w nim wynik aktualizacji.",
+                "✓ Journal loaded. Check the entries for the update result.",
+            ),
+            Self::Inventory => t("✓ Lista dodatków odczytana.", "✓ Addon inventory loaded."),
+            Self::AvailableUpdates => t(
+                "✓ Sprawdzono dostępne aktualizacje.",
+                "✓ Available updates checked.",
+            ),
+            _ => t(
+                "✓ Operacja zakończona pomyślnie.",
+                "✓ Operation completed successfully.",
+            ),
+        }
+    }
 }
 
 enum Message {
@@ -153,8 +171,19 @@ fn apply_status(
         Some(version) => format!("v{version} · {}", t("Wymaga naprawy", "Repair needed")),
         None => t("Brak agenta", "Agent missing").into(),
     });
-    parts.timer_value.set_text(if summary.timer_active {
+    parts.timer_value.remove_css_class("warning");
+    if summary.last_service_failed {
+        parts.timer_value.add_css_class("warning");
+    }
+    parts.timer_value.set_text(if summary.timer_active && summary.last_service_failed {
+        t(
+            "Aktywny · ostatni cykl nieudany",
+            "Active · last update failed",
+        )
+    } else if summary.timer_active {
         t("Aktywny", "Active")
+    } else if summary.last_service_failed {
+        t("Nieaktywny · ostatni cykl nieudany", "Inactive · last update failed")
     } else {
         t("Nieaktywny", "Inactive")
     });
@@ -509,14 +538,13 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                     let succeeded = result.is_ok();
                     match result {
                         Ok(()) => {
-                            append_log(
-                                &parts.output,
-                                t(
-                                    "✓ Operacja zakończona pomyślnie.",
-                                    "✓ Operation completed successfully.",
-                                ),
-                            );
-                            parts.toast.add_toast(adw::Toast::new(t("Gotowe", "Done")));
+                            append_log(&parts.output, task.completion_message());
+                            let toast_text = if matches!(task, Task::Operation(Job::Journal)) {
+                                t("Dziennik odczytany", "Journal loaded")
+                            } else {
+                                t("Gotowe", "Done")
+                            };
+                            parts.toast.add_toast(adw::Toast::new(toast_text));
                         }
                         Err(error) => {
                             append_log(&parts.output, &format!("✗ {error}"));
@@ -556,14 +584,27 @@ fn launch(parts: UiParts, task: Task, settings: Settings) {
                         parts.dirty.set(false);
                         parts.unsaved.set_visible(false);
                     }
-                    if matches!(task, Task::Operation(Job::Update | Job::RunService)) {
-                        parts.updates.borrow_mut().clear();
-                        parts.update_overview.borrow_mut().take();
-                        clear_list(&parts.updates_list);
+                    if !succeeded && matches!(task, Task::AvailableUpdates) {
                         parts.updates_count.set_text(t(
-                            "Po aktualizacji sprawdź dostępne wersje ponownie.",
-                            "Check available versions again after the update.",
+                            "Nie udało się sprawdzić KDE Store · poprzednie wyniki mogą być nieaktualne",
+                            "KDE Store check failed · previous results may be outdated",
                         ));
+                    }
+                    if matches!(task, Task::Operation(Job::Update | Job::RunService)) {
+                        if succeeded {
+                            parts.updates.borrow_mut().clear();
+                            parts.update_overview.borrow_mut().take();
+                            clear_list(&parts.updates_list);
+                            parts.updates_count.set_text(t(
+                                "Po aktualizacji sprawdź dostępne wersje ponownie.",
+                                "Check available versions again after the update.",
+                            ));
+                        } else {
+                            parts.updates_count.set_text(t(
+                                "Cykl nieudany · zachowano poprzednią listę (może być nieaktualna)",
+                                "Update failed · previous results kept (may be outdated)",
+                            ));
+                        }
                         launch(parts.clone(), Task::Inventory, Settings::default());
                     }
                     return glib::ControlFlow::Break;

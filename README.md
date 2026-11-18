@@ -14,7 +14,7 @@ A native **Rust + GTK4/libadwaita** companion app for [plasmoid-updater](https:/
 ![Platform](https://img.shields.io/badge/platform-Bazzite%20KDE-blue)
 ![Architecture](https://img.shields.io/badge/architecture-x86__64-5965a8)
 
-**[⬇️ Download AppImage / Pobierz AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage)** · **[📦 Releases](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases)** · **[🐛 Report an issue](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues)**
+**[⬇️ Download AppImage / Pobierz AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage)** · **[📦 Releases](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases)** · **[🐛 Report an issue](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/issues)**
 
 **[🇵🇱 Polski](#pl)** · **[🇬🇧 English](#en)**
 
@@ -62,18 +62,21 @@ Interfejs dopasowuje się do wąskich okien, zachowuje ustawienia języka (polsk
 
 **Wymagania:** Bazzite z **KDE Plasma 6**, architektura **x86_64**, połączenie z Internetem, `curl`, `systemctl --user` i `kpackagetool6`. Do instalowania aktualizacji dodatków potrzebny jest `bsdtar` — jeżeli go brakuje, instalator może doinstalować `libarchive` przez Homebrew.
 
-1. **[Pobierz najnowszy AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage)**.
+1. **[Pobierz najnowszy AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage)**.
 2. Otwórz terminal w katalogu z pobranym plikiem i wykonaj:
 
    ```bash
-   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
-   ./Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
+   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage
+   ./Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage
    ```
 
 3. Na ekranie **Pulpit** kliknij **Sprawdź składniki**.
 4. Przejdź do **Instalacja → Zainstaluj / uaktualnij**.
 5. Na ekranie **Dodatki Plasma** przejrzyj dodatki, a w **Automatyzacja** ustaw harmonogram i kliknij **Zapisz i zastosuj**.
 6. Użyj przycisku **Przetestuj** (bez zmian w dodatkach), zanim wybierzesz **Uruchom teraz** (rzeczywista aktualizacja).
+
+> [!NOTE]
+> Wersja **1.0.2** naprawia błąd instalacji `plasmoid-updater` (ETXTBSY / Text file busy).
 
 > [!TIP]
 > AppImage jest przenośny, a agent aktualizacji działa niezależnie od otwartego okna aplikacji. Nie musisz pozostawiać GUI uruchomionego.
@@ -200,18 +203,21 @@ The interface adapts to smaller windows, remembers your preferred language (Poli
 
 **Requirements:** Bazzite with **KDE Plasma 6**, **x86_64** architecture, Internet access, `curl`, `systemctl --user`, and `kpackagetool6`. Updating add-ons requires `bsdtar`; if missing, the installer can install `libarchive` through Homebrew.
 
-1. **[Download the latest AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage)**.
+1. **[Download the latest AppImage](https://github.com/wolfgangxxiii/bazzite-kde-installer-plasmoid-updater-gui/releases/latest/download/Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage)**.
 2. Open a terminal in the download directory and run:
 
    ```bash
-   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
-   ./Bazzite-Plasmoid-Updater-GUI-v1.0.1-x86_64.AppImage
+   chmod +x Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage
+   ./Bazzite-Plasmoid-Updater-GUI-v1.0.2-x86_64.AppImage
    ```
 
 3. On the **Dashboard**, select **Check requirements**.
 4. Go to **Installation → Install / upgrade**.
 5. Browse components under **Plasma Addons**, then choose your schedule under **Automation** and click **Save and apply**.
 6. Choose **Test** (no add-on changes) before **Run now** (performs actual updates).
+
+> [!NOTE]
+> Version **1.0.2** fixes the `plasmoid-updater` installation failure (ETXTBSY / Text file busy).
 
 > [!TIP]
 > The AppImage is portable, and the updater agent works independently of the application window. You don't have to keep the GUI open.

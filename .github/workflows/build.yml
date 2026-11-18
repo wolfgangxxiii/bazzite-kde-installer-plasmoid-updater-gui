@@ -104,7 +104,7 @@ jobs:
               gh release create "$release_tag" dist/*.AppImage \
                 --target "$GITHUB_SHA" \
                 --title "Bazzite Plasmoid Updater GUI ${release_tag}" \
-                --notes "Wersja 1.0.1: prostsze menu Nawigacja, symetryczne ikony, czytelniejsza ikona odświeżania, przyciski w kolorze akcentu KDE oraz automatyczny wybór języka systemu."
+                --notes "Wersja 1.0.2: poprawiona instalacja plasmoid-updater (ETXTBSY), bezpieczna weryfikacja przed zastąpieniem binarki i dokładniejsze komunikaty błędów."
             fi
           elif gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release upload "$GITHUB_REF_NAME" dist/*.AppImage --clobber
